@@ -1,0 +1,26 @@
+deploy/deploy.sh
+  s_aabe81c7e415b7::t_d08e69840df2b1 226-236
+  s_aabe81c7e415b7::t_4ebc19ddba3591 313,315-318
+  s_aabe81c7e415b7::t_6560212bc5a1b3 86-89,91,93-94,96-100,102-103
+  s_aabe81c7e415b7::t_1e818ede907eb2 198-199
+  s_aabe81c7e415b7::t_be8320959fb501 252,256-257,259
+  s_aabe81c7e415b7::t_0e36aea22746ed 286-292
+deploy/docker-compose.prod.yml
+  s_aabe81c7e415b7::t_3f73e59e686930 30-32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.11",
+  "base_commit_sha": "a4c88048eba62b1e1c681b6df1b01fa6855cf08f",
+  "prompts": {},
+  "sessions": {
+    "s_aabe81c7e415b7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "16208824-dfa5-487b-8cc6-845d9716a67e",
+        "model": "claude-4-opus"
+      },
+      "human_author": "xiansuo.dai <xiansuo.dai@ly.com>"
+    }
+  }
+}
