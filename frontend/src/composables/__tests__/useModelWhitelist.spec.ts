@@ -199,6 +199,7 @@ describe('useModelWhitelist', () => {
     expect(mappings.every(item => !item.to.endsWith('-chat'))).toBe(true)
     expect(mappings.every(item => item.from.startsWith('claude-'))).toBe(true)
     expect(mappings.every(item => item.to.startsWith('claude-'))).toBe(true)
+    expect(mappings.some(item => item.to === 'claude-opus-4-7')).toBe(false)
   })
 
   it('combined 模式会同时保留白名单身份映射和模型映射', () => {

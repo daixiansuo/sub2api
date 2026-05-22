@@ -2366,6 +2366,8 @@ export default {
         webSearchEmulationGlobalDisabled: 'Please enable the global switch first in Settings → Gateway → Web Search Emulation',
         codexImageGenerationBridge: 'Codex Image Generation Bridge',
         codexImageGenerationBridgeHint: 'When enabled, Codex /responses text requests in OpenAI groups may be automatically given the image_generation tool. Keep off unless the routed accounts support image generation.',
+        bedrockCCCompat: 'Bedrock CC Compatibility',
+        bedrockCCCompatHint: '⚠️ When enabled, requests to Bedrock accounts in this channel will be transformed for Claude Code compatibility (thinking type conversion, tool_use ID sanitization).',
         basicSettings: 'Basic Settings',
         addPlatform: 'Add Platform',
         noPlatforms: 'Click "Add Platform" to start configuring the channel',
@@ -3187,6 +3189,10 @@ export default {
       bulkDeleteSuccess: 'Deleted {count} account(s)',
       bulkDeletePartial: 'Partially deleted: {success} succeeded, {failed} failed',
       bulkDeleteFailed: 'Bulk delete failed',
+      bulkResetStatusTitle: 'Bulk Reset Status',
+      bulkResetStatusConfirm: 'Reset the status of {count} selected account(s)?',
+      bulkRefreshTokenTitle: 'Bulk Refresh Token',
+      bulkRefreshTokenConfirm: 'Refresh the token of {count} selected account(s)?',
       recoverState: 'Recover State',
       recoverStateHint: 'Used to recover error, rate-limit, and temporary unschedulable runtime state.',
       recoverStateSuccess: 'Account state recovered successfully',
@@ -5385,7 +5391,15 @@ export default {
         siteKeyHint: 'Get this from your Cloudflare Dashboard',
         cloudflareDashboard: 'Cloudflare Dashboard',
         secretKeyHint: 'Server-side verification key (keep this secret)',
-        secretKeyConfiguredHint: 'Secret key configured. Leave empty to keep the current value.'      },
+        secretKeyConfiguredHint: 'Secret key configured. Leave empty to keep the current value.'
+      },
+      apiKeyAcl: {
+        title: 'API Key IP Access Control',
+        description: 'Choose which client IP is used by API Key allowlists and denylists',
+        trustForwardedIp: 'Trust forwarded client IP',
+        trustForwardedIpHint:
+          'Disabled by default. Enable only when the origin is reachable only through Cloudflare or Nginx reverse proxy. When enabled, API Key IP allowlists and denylists use CF-Connecting-IP, X-Real-IP, or X-Forwarded-For, matching the request IP shown in usage records.'
+      },
       linuxdo: {
         title: 'LinuxDo Connect Login',
         description: 'Configure LinuxDo Connect OAuth for Sub2API end-user login',
@@ -5862,6 +5876,12 @@ export default {
         emailsHint: 'Leave empty to disable notifications',
         addEmail: 'Add Email',
         emailPlaceholder: 'Enter email address',
+      },
+      subscriptionExpiryNotify: {
+        title: 'Subscription Expiry Reminder',
+        description: 'Control whether users receive subscription expiry reminder emails.',
+        enabled: 'Enable Subscription Expiry Reminder',
+        enabledHint: 'When enabled, the system sends reminders 7, 3, and 1 day before expiry.'
       },
       smtp: {
         title: 'SMTP Settings',
