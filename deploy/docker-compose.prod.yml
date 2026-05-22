@@ -27,7 +27,9 @@ services:
         soft: 100000
         hard: 100000
     ports:
-      - "${BIND_HOST:-0.0.0.0}:${SERVER_PORT:-8080}:8080"
+      # 绑定地址：默认仅监听本地，配合反向代理（Nginx/Caddy）使用更安全
+      # 如需直接对外暴露，将 BIND_HOST 改为 0.0.0.0
+      - "${BIND_HOST:-127.0.0.1}:${SERVER_PORT:-8080}:8080"
     volumes:
       # Local directory mapping for easy migration
       - ./data:/app/data

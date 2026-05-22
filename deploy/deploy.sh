@@ -83,21 +83,24 @@ save_version() {
 }
 
 generate_image_tag() {
-    cd "$REPO_ROOT"
-    local git_commit git_tag image_tag
+    # 在子 shell 中执行，避免 cd 污染调用方的工作目录
+    (
+        cd "$REPO_ROOT"
+        local git_commit git_tag image_tag
 
-    git_commit="$(git rev-parse --short HEAD)"
+        git_commit="$(git rev-parse --short HEAD)"
 
-    # Check for exact git tag on current commit
-    git_tag="$(git describe --tags --exact-match 2>/dev/null || true)"
+        # Check for exact git tag on current commit
+        git_tag="$(git describe --tags --exact-match 2>/dev/null || true)"
 
-    if [ -n "$git_tag" ]; then
-        image_tag="${git_tag}-${git_commit}"
-    else
-        image_tag="$(date '+%Y%m%d-%H%M%S')-${git_commit}"
-    fi
+        if [ -n "$git_tag" ]; then
+            image_tag="${git_tag}-${git_commit}"
+        else
+            image_tag="$(date '+%Y%m%d-%H%M%S')-${git_commit}"
+        fi
 
-    echo "$image_tag"
+        echo "$image_tag"
+    )
 }
 
 docker_compose() {
@@ -192,8 +195,8 @@ cmd_rollback() {
         local current_tag
         current_tag="$(get_current_version)"
 
-        # Find the most recent entry that is different from current
-        target_tag="$(grep '| deploy |' "$DEPLOY_HISTORY_FILE" \
+        # 从历史记录中查找上一个不同版本（同时搜索 deploy 和 rollback 记录）
+        target_tag="$(grep -E '\| (deploy|rollback) \|' "$DEPLOY_HISTORY_FILE" \
             | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/, "", $3); print $3}' \
             | grep -v "^${current_tag}$" \
             | tail -1)"
@@ -220,6 +223,17 @@ cmd_rollback() {
     current_tag="$(get_current_version)"
     warn "Rolling back: ${current_tag} -> ${BLUE}${target_tag}${NC}"
 
+    # Interactive confirmation to prevent accidental rollbacks
+    echo ""
+    echo -e "  Current version:  ${YELLOW}${current_tag}${NC}"
+    echo -e "  Target version:   ${GREEN}${target_tag}${NC}"
+    echo ""
+    read -rp "Proceed with rollback? [y/N] " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        info "Rollback cancelled."
+        exit 0
+    fi
+
     IMAGE_TAG="$target_tag" docker_compose up -d
 
     echo "$target_tag" > "$CURRENT_VERSION_FILE"
@@ -235,17 +249,14 @@ cmd_list() {
     local current_tag
     current_tag="$(get_current_version)"
 
-    # List all tags sorted by creation time (newest first)
+    # 分两步：先输出表头，再逐行输出（排除 latest 和 <none>）
     docker images "${IMAGE_NAME}" --format "table {{.Tag}}\t{{.Size}}\t{{.CreatedAt}}" \
         | head -1  # header
 
-    docker images "${IMAGE_NAME}" --format "{{.Tag}}\t{{.Size}}\t{{.CreatedAt}}" \
-        | grep -v '^latest$' \
+    docker images "${IMAGE_NAME}" --format "{{.CreatedSince}}\t{{.Tag}}\t{{.Size}}\t{{.CreatedAt}}" \
+        | grep -vE '(^|\t)(latest|<none>)(\t|$)' \
         | sort -r \
-        | while IFS=$'\t' read -r tag size created; do
-            if [ "$tag" = "latest" ]; then
-                continue
-            fi
+        | while IFS=$'\t' read -r _age tag size created; do
             if [ "$tag" = "$current_tag" ]; then
                 echo -e "  ${GREEN}* ${tag}${NC}\t${size}\t${created}  ${GREEN}<- current${NC}"
             else
@@ -272,7 +283,13 @@ cmd_status() {
 
     check_compose_file
     if [ -f "$ENV_FILE" ]; then
-        IMAGE_TAG="$current_tag" docker_compose ps
+        if [ "$current_tag" = "unknown" ]; then
+            # 版本未知时使用 latest 避免 compose 报错
+            warn "No version recorded, showing status with 'latest' tag"
+            IMAGE_TAG="latest" docker_compose ps
+        else
+            IMAGE_TAG="$current_tag" docker_compose ps
+        fi
     else
         warn ".env not found, showing raw docker status"
         docker ps --filter "name=sub2api" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
@@ -293,11 +310,12 @@ cmd_cleanup() {
     local keep="${1:-5}"
     info "Cleaning up old images, keeping latest ${keep} versions..."
 
-    # Get all tags except 'latest', sorted newest first
+    # 按镜像创建时间倒序获取 tag（排除 latest 和 <none>），确保混合格式 tag 也能正确排序
     local tags
-    tags="$(docker images "${IMAGE_NAME}" --format "{{.Tag}}" \
-        | grep -v '^latest$' \
-        | sort -r)"
+    tags="$(docker images "${IMAGE_NAME}" --format "{{.CreatedAt}}\t{{.Tag}}" \
+        | grep -vE '\t(latest|<none>)$' \
+        | sort -r \
+        | cut -f2)"
 
     local count=0
     local removed=0
