@@ -537,6 +537,7 @@ type adminServiceImpl struct {
 	defaultSubAssigner   DefaultSubscriptionAssigner
 	userSubRepo          UserSubscriptionRepository
 	privacyClientFactory PrivacyClientFactory
+	runtimeBlocker       AccountRuntimeBlocker
 }
 
 type userGroupRateBatchReader interface {
@@ -562,6 +563,7 @@ func NewAdminService(
 	defaultSubAssigner DefaultSubscriptionAssigner,
 	userSubRepo UserSubscriptionRepository,
 	privacyClientFactory PrivacyClientFactory,
+	runtimeBlocker AccountRuntimeBlocker,
 ) AdminService {
 	return &adminServiceImpl{
 		userRepo:             userRepo,
@@ -581,6 +583,7 @@ func NewAdminService(
 		defaultSubAssigner:   defaultSubAssigner,
 		userSubRepo:          userSubRepo,
 		privacyClientFactory: privacyClientFactory,
+		runtimeBlocker:       runtimeBlocker,
 	}
 }
 
@@ -2413,6 +2416,9 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 			return nil, err
 		}
 		ComputeQuotaResetAt(account.Extra)
+		if err := validateAccountCustomHeadersFromExtra(account.Extra); err != nil {
+			return nil, err
+		}
 	}
 	if input.ExpiresAt != nil && *input.ExpiresAt > 0 {
 		expiresAt := time.Unix(*input.ExpiresAt, 0)
@@ -2521,6 +2527,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			return nil, err
 		}
 		ComputeQuotaResetAt(account.Extra)
+		if err := validateAccountCustomHeadersFromExtra(account.Extra); err != nil {
+			return nil, err
+		}
 	}
 	if input.ProxyID != nil {
 		// 0 表示清除代理（前端发送 0 而不是 null 来表达清除意图）
@@ -2808,6 +2817,9 @@ func (s *adminServiceImpl) ClearAccountError(ctx context.Context, id int64) (*Ac
 	}
 	if err := s.accountRepo.ClearTempUnschedulable(ctx, id); err != nil {
 		return nil, err
+	}
+	if s.runtimeBlocker != nil {
+		s.runtimeBlocker.ClearAccountSchedulingBlock(id)
 	}
 	return s.accountRepo.GetByID(ctx, id)
 }

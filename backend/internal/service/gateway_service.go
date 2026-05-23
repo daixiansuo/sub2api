@@ -4469,15 +4469,8 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 
 	// Web Search 模拟：纯 web_search 请求时，直接调用搜索 API 构造响应。
 	// Kiro OAuth 在 forwardKiroMessages 内部完成模型映射后再判断，避免使用未映射的请求体。
-	if account != nil && !(account.Platform == PlatformKiro && account.Type == AccountTypeOAuth) && s.shouldEmulateWebSearch(ctx, account, parsed.GroupID, parsed.Body) {
+	if account != nil && (account.Platform != PlatformKiro || account.Type != AccountTypeOAuth) && s.shouldEmulateWebSearch(ctx, account, parsed.GroupID, parsed.Body) {
 		return s.handleWebSearchEmulation(ctx, c, account, parsed)
-	}
-
-	// Bedrock CC 兼容：在转发之前对请求体做 CC 兼容处理。
-	// 只修改 body 内容（thinking 类型、tool_use ID），不影响后续的透传/Bedrock 转发路径。
-	if account != nil && s.isBedrockCCCompatEnabled(ctx, account, parsed.GroupID) {
-		parsed.Body = sanitizeBedrockThinking(parsed.Body, parsed.Model)
-		parsed.Body = sanitizeBedrockToolUseIDs(parsed.Body)
 	}
 
 	if account != nil && account.IsAnthropicAPIKeyPassthroughEnabled() {
@@ -5398,6 +5391,9 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 		setHeaderRaw(req.Header, "anthropic-version", "2023-06-01")
 	}
 
+	// 账号级自定义请求头（最后应用，覆盖同名 header）
+	applyAccountCustomHeaders(req, account)
+
 	return req, nil
 }
 
@@ -5775,6 +5771,19 @@ func writeAnthropicPassthroughResponseHeaders(dst http.Header, src http.Header, 
 	if v := strings.TrimSpace(src.Get("x-request-id")); v != "" {
 		dst.Set("x-request-id", v)
 	}
+}
+
+// ApplyBedrockCCCompat 应用 Bedrock CC 兼容转换（渠道级模型映射后调用）
+// 清理 Anthropic API 专有字段、注入 Bedrock 必需字段、修复 thinking/tool_use ID
+func (s *GatewayService) ApplyBedrockCCCompat(ctx context.Context, body []byte, model string, account *Account, groupID *int64) []byte {
+	if !s.isBedrockCCCompatEnabled(ctx, account, groupID) {
+		return body
+	}
+	body = sanitizeBedrockCCFields(body)
+	body = sanitizeBedrockThinking(body, model)
+	body = sanitizeBedrockToolUseIDs(body)
+	body = sanitizeBedrockCCBetaTokens(body, model)
+	return body
 }
 
 // isBedrockCCCompatEnabled 检查渠道是否启用了 Bedrock CC 兼容模式
@@ -6315,6 +6324,9 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 		}
 	}
 
+	// 账号级自定义请求头（最后应用，覆盖同名 header）
+	applyAccountCustomHeaders(req, account)
+
 	// === DEBUG: 打印上游转发请求（headers + body 摘要），与 CLIENT_ORIGINAL 对比 ===
 	s.debugLogGatewaySnapshot("UPSTREAM_FORWARD", req.Header, body, map[string]string{
 		"url":                 req.URL.String(),
@@ -6471,6 +6483,22 @@ func applyClaudeOAuthHeaderDefaults(req *http.Request) {
 		if getHeaderRaw(req.Header, key) == "" {
 			setHeaderRaw(req.Header, resolveWireCasing(key), value)
 		}
+	}
+}
+
+// applyAccountCustomHeaders 注入账号级自定义请求头。
+// 作为最后一步调用，覆盖同名 header。运行时兜底跳过禁止的 header。
+func applyAccountCustomHeaders(req *http.Request, account *Account) {
+	headers := account.GetCustomHeaders()
+	if len(headers) == 0 {
+		return
+	}
+	for k, v := range headers {
+		lower := strings.ToLower(strings.TrimSpace(k))
+		if IsForbiddenHeaderName(k) || accountCustomHeaderForbidden[lower] {
+			continue
+		}
+		setHeaderRaw(req.Header, k, v)
 	}
 }
 
