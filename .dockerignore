@@ -30,6 +30,9 @@ build/
 frontend/node_modules/
 node_modules/
 
+# pnpm workspace file (not a monorepo)
+frontend/pnpm-workspace.yaml
+
 # Go build cache (will be built in container)
 backend/vendor/
 
