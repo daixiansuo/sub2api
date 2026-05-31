@@ -120,7 +120,8 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		if resp.StatusCode >= 400 {
 			return nil, s.handleKiroHTTPError(ctx, resp, c, account, mappedModel, body)
 		}
-		upstreamModel := normalizeModelNameForPricing(kiropkg.MapModel(mappedModel))
+		// upstream_model 直接使用账号映射后的值，反映真实打到 Kiro 的模型 ID
+		upstreamModel := mappedModel
 		streamResult, err := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, mappedModel, false)
 		if err != nil {
 			return nil, err
@@ -152,7 +153,8 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		switch {
 		case errors.Is(webSearchErr, errKiroWebSearchFallback):
 		case webSearchErr == nil:
-			upstreamModel := normalizeModelNameForPricing(kiropkg.MapModel(mappedModel))
+			// upstream_model 直接使用账号映射后的值，反映真实打到 Kiro 的模型 ID
+			upstreamModel := mappedModel
 			c.Header("Content-Type", "application/json")
 			if webSearchResult.RequestID != "" {
 				c.Header("x-request-id", webSearchResult.RequestID)
@@ -245,7 +247,8 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	}
 	c.Data(http.StatusOK, "application/json", parseResult.ResponseBody)
 
-	upstreamModel := normalizeModelNameForPricing(kiropkg.MapModel(mappedModel))
+	// upstream_model 直接使用账号映射后的值，反映真实打到 Kiro 的模型 ID
+	upstreamModel := mappedModel
 
 	return &ForwardResult{
 		RequestID:     resp.Header.Get("x-request-id"),
