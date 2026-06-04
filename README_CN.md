@@ -29,6 +29,13 @@
 |------|------|
 | admin@sub2api.org | admin123 |
 
+## 交流群
+
+- **Telegram**：[点击加入](https://t.me/+Pv3T6ncordwxOTZl)
+- **微信群**：扫描下方二维码
+
+<img src="assets/community/wechat-group.jpg" alt="微信交流群二维码" width="280">
+
 ## 项目概述
 
 Sub2API 是一个 AI API 网关平台，用于分发和管理 AI 产品订阅的 API 配额。用户通过平台生成的 API Key 调用上游 AI 服务，平台负责鉴权、计费、负载均衡和请求转发。
@@ -46,12 +53,12 @@ Sub2API 是一个 AI API 网关平台，用于分发和管理 AI 产品订阅的
 ## Kiro 功能截图
 
 <p align="center">
-  <img src="assets/screenshots/kiro-account-management.png" alt="Kiro 账号管理" width="100%">
+  <img src="assets/screenshots/kiro-add-account.png" alt="添加 Kiro 账号" width="58%">
+  <img src="assets/screenshots/kiro-cache-emulation.png" alt="Kiro 分组模拟缓存配置" width="35%">
 </p>
 
 <p align="center">
-  <img src="assets/screenshots/kiro-add-account.png" alt="添加 Kiro 账号" width="58%">
-  <img src="assets/screenshots/kiro-cache-emulation.png" alt="Kiro 分组模拟缓存配置" width="35%">
+  <img src="assets/screenshots/kiro-account-management.png" alt="Kiro 账号管理" width="100%">
 </p>
 
 ## 核心功能

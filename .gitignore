@@ -112,6 +112,10 @@ backend/config.yaml
 deploy/config.yaml
 backend/.installed
 
+# 部署版本文件
+deploy/.current_version
+deploy/.deploy_history
+
 # ===================
 # 其他
 # ===================

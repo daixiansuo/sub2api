@@ -461,22 +461,12 @@
                     >
                       {{ t("admin.settings.streamTimeout.action") }}
                     </label>
-                    <select
-                      v-model="streamTimeoutForm.action"
-                      class="input w-64"
-                    >
-                      <option value="temp_unsched">
-                        {{
-                          t("admin.settings.streamTimeout.actionTempUnsched")
-                        }}
-                      </option>
-                      <option value="error">
-                        {{ t("admin.settings.streamTimeout.actionError") }}
-                      </option>
-                      <option value="none">
-                        {{ t("admin.settings.streamTimeout.actionNone") }}
-                      </option>
-                    </select>
+                    <div class="w-64">
+                      <Select
+                        v-model="streamTimeoutForm.action"
+                        :options="streamTimeoutActionOptions"
+                      />
+                    </div>
                     <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
                       {{ t("admin.settings.streamTimeout.actionHint") }}
                     </p>
@@ -2910,18 +2900,10 @@
                     >
                       {{ t("admin.settings.oidc.tokenAuthMethod") }}
                     </label>
-                    <select
+                    <Select
                       v-model="form.oidc_connect_token_auth_method"
-                      class="input font-mono text-sm"
-                    >
-                      <option value="client_secret_post">
-                        client_secret_post
-                      </option>
-                      <option value="client_secret_basic">
-                        client_secret_basic
-                      </option>
-                      <option value="none">none</option>
-                    </select>
+                      :options="oidcTokenAuthMethodOptions"
+                    />
                   </div>
 
                   <div>
@@ -4878,14 +4860,10 @@
                     >
                       {{ t("admin.settings.customMenu.visibility") }}
                     </label>
-                    <select v-model="item.visibility" class="input text-sm">
-                      <option value="user">
-                        {{ t("admin.settings.customMenu.visibilityUser") }}
-                      </option>
-                      <option value="admin">
-                        {{ t("admin.settings.customMenu.visibilityAdmin") }}
-                      </option>
-                    </select>
+                    <Select
+                      v-model="item.visibility"
+                      :options="customMenuVisibilityOptions"
+                    />
                   </div>
 
                   <!-- URL (full width) -->
@@ -6750,6 +6728,22 @@ import {
 } from "@/utils/registrationEmailPolicy";
 
 const { t, locale } = useI18n();
+
+// Select 选项（i18n label 用 computed 保证切换语言响应式）
+const streamTimeoutActionOptions = computed(() => [
+  { value: "temp_unsched", label: t("admin.settings.streamTimeout.actionTempUnsched") },
+  { value: "error", label: t("admin.settings.streamTimeout.actionError") },
+  { value: "none", label: t("admin.settings.streamTimeout.actionNone") },
+]);
+const oidcTokenAuthMethodOptions = [
+  { value: "client_secret_post", label: "client_secret_post" },
+  { value: "client_secret_basic", label: "client_secret_basic" },
+  { value: "none", label: "none" },
+];
+const customMenuVisibilityOptions = computed(() => [
+  { value: "user", label: t("admin.settings.customMenu.visibilityUser") },
+  { value: "admin", label: t("admin.settings.customMenu.visibilityAdmin") },
+]);
 const appStore = useAppStore();
 const adminSettingsStore = useAdminSettingsStore();
 const isZhLocale = computed(() => locale.value.startsWith("zh"));

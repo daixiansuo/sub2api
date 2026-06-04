@@ -30,6 +30,13 @@ Demo credentials (shared demo environment; **not** created automatically for sel
 |-------|----------|
 | admin@sub2api.org | admin123 |
 
+## Community
+
+- **Telegram**: [Join the group](https://t.me/+Pv3T6ncordwxOTZl)
+- **WeChat**: scan the QR code below
+
+<img src="assets/community/wechat-group.jpg" alt="WeChat group QR code" width="280">
+
 ## Overview
 
 Sub2API is an AI API gateway platform designed to distribute and manage API quotas from AI product subscriptions. Users can access upstream AI services through platform-generated API Keys, while the platform handles authentication, billing, load balancing, and request forwarding.
@@ -47,12 +54,12 @@ Additional Kiro-focused features in this fork:
 ## Kiro Screenshots
 
 <p align="center">
-  <img src="assets/screenshots/kiro-account-management.png" alt="Kiro account management" width="100%">
+  <img src="assets/screenshots/kiro-add-account.png" alt="Add Kiro account" width="58%">
+  <img src="assets/screenshots/kiro-cache-emulation.png" alt="Kiro cache emulation group settings" width="35%">
 </p>
 
 <p align="center">
-  <img src="assets/screenshots/kiro-add-account.png" alt="Add Kiro account" width="58%">
-  <img src="assets/screenshots/kiro-cache-emulation.png" alt="Kiro cache emulation group settings" width="35%">
+  <img src="assets/screenshots/kiro-account-management.png" alt="Kiro account management" width="100%">
 </p>
 
 ## Features
