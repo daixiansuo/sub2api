@@ -140,6 +140,7 @@ services:
         condition: service_healthy
     networks:
       - sub2api-network
+      - bytetoken-backplane
     healthcheck:
       test: ["CMD", "wget", "-q", "-T", "5", "-O", "/dev/null", "http://localhost:8080/health"]
       interval: 30s
@@ -213,3 +214,6 @@ services:
 networks:
   sub2api-network:
     driver: bridge
+  bytetoken-backplane:
+    external: true
+    name: bytetoken-backplane

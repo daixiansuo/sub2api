@@ -17,7 +17,9 @@ deploy/
 ├── docker-compose.prod.yml   # 生产部署 compose 文件
 ├── deploy.sh                 # 部署管理脚本
 ├── .current_version          # 当前运行版本（自动生成，git 忽略）
+├── .pending_version          # 已构建、待部署版本（自动生成，git 忽略）
 ├── .deploy_history           # 部署历史记录（自动生成，git 忽略）
+├── backups/                  # 本地备份目录（自动生成，git 忽略）
 ├── data/                     # 应用数据目录（运行时生成）
 ├── postgres_data/            # PostgreSQL 数据目录（运行时生成）
 └── redis_data/               # Redis 数据目录（运行时生成）
@@ -25,12 +27,13 @@ deploy/
 
 ## 核心设计：构建与部署分离
 
-每次构建会生成一个**带版本标签的本地 Docker 镜像**，旧版本镜像保留在本地不会被覆盖。
+每次构建会生成一个**带版本标签的本地 Docker 镜像**，并记录到 `.pending_version`。
+部署成功后才会更新 `.current_version` 和 `.deploy_history`，旧版本镜像保留在本地不会被覆盖。
 部署和回滚只是切换使用哪个标签的镜像，无需重新构建。
 
 ```
-构建（分钟级）：源码 → sub2api:20260522-143052-a1b2c3d
-部署（秒级）  ：docker compose 启动指定标签的镜像
+构建（分钟级）：源码 → sub2api:20260522-143052-a1b2c3d → .pending_version
+部署（秒级）  ：docker compose 启动指定标签的镜像 → .current_version
 回滚（秒级）  ：切换到旧标签，重启容器
 ```
 
@@ -82,10 +85,19 @@ vim deploy/.env
 ```bash
 cd /opt/sub2api
 git pull
+./deploy/deploy.sh backup
+./deploy/deploy.sh preflight
 ./deploy/deploy.sh up
 ```
 
 `up` 命令会自动执行：构建新镜像 → 打版本标签 → 重启容器。
+
+如需分步执行：
+
+```bash
+./deploy/deploy.sh build     # 只构建，写入 .pending_version，不影响当前运行版本
+./deploy/deploy.sh deploy    # 部署 pending 版本，成功后更新 .current_version
+```
 
 ## 版本回滚
 
@@ -126,6 +138,8 @@ Recent deploy history (last 10):
 | `./deploy.sh build` | 分钟级 | 仅构建镜像，不启动服务 |
 | `./deploy.sh deploy` | 秒级 | 用最新构建的镜像启动/更新服务 |
 | `./deploy.sh up` | 分钟级 | build + deploy 一步到位 |
+| `./deploy.sh preflight` | - | 校验 compose/env/backplane 网络和端口监听 |
+| `./deploy.sh backup` | - | 备份配置、版本状态、数据目录，并尽量生成 PostgreSQL dump |
 | `./deploy.sh rollback [tag]` | 秒级 | 回滚到上一版本或指定版本 |
 | `./deploy.sh list` | - | 列出所有本地镜像版本和部署历史 |
 | `./deploy.sh status` | - | 查看当前运行版本和容器状态 |
