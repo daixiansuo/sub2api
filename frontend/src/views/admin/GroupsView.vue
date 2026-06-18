@@ -636,6 +636,35 @@
 
         <!-- Kiro 模拟缓存配置 -->
         <div v-if="createForm.platform === 'kiro'" class="border-t pt-4">
+          <!-- 粘性路由说明 -->
+          <label class="mb-4 flex items-start gap-3 rounded-md bg-blue-50 p-3 text-sm text-blue-700 dark:bg-blue-900/20 dark:text-blue-300">
+            <input
+              v-model="createForm.kiro_auto_sticky_enabled"
+              type="checkbox"
+              class="mt-0.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            <span>
+              <span class="block text-xs font-medium text-blue-700 dark:text-blue-400">
+                {{ t("admin.groups.kiroCache.stickyRouting") }}
+              </span>
+              <span class="mt-1 block text-xs text-blue-600 dark:text-blue-300">
+                {{ t("admin.groups.kiroCache.stickyRoutingHint") }}
+              </span>
+            </span>
+          </label>
+          <div v-if="createForm.kiro_auto_sticky_enabled" class="mb-4">
+            <label class="input-label">{{ t("admin.groups.kiroCache.stickyTTL") }}</label>
+            <input
+              v-model.number="createForm.kiro_sticky_session_ttl_seconds"
+              type="number"
+              step="60"
+              min="60"
+              max="86400"
+              class="input"
+              placeholder="3600"
+            />
+            <p class="input-hint">{{ t("admin.groups.kiroCache.stickyTTLHint") }}</p>
+          </div>
           <label class="block mb-2 font-medium text-gray-700 dark:text-gray-300">
             {{ t("admin.groups.kiroCache.title") }}
           </label>
@@ -662,6 +691,14 @@
               placeholder="1"
             />
             <p class="input-hint">{{ t("admin.groups.kiroCache.ratioHint") }}</p>
+          </div>
+          <div class="mt-3">
+            <label class="input-label">{{ t("admin.groups.kiroCache.endpointMode") }}</label>
+            <select v-model="createForm.kiro_endpoint_mode" class="input">
+              <option value="q">{{ t("admin.groups.kiroCache.endpointModeQ") }}</option>
+              <option value="krs">{{ t("admin.groups.kiroCache.endpointModeKRS") }}</option>
+            </select>
+            <p class="input-hint">{{ t("admin.groups.kiroCache.endpointModeHint") }}</p>
           </div>
         </div>
 
@@ -1942,6 +1979,35 @@
 
         <!-- Kiro 模拟缓存配置 -->
         <div v-if="editForm.platform === 'kiro'" class="border-t pt-4">
+          <!-- 粘性路由说明 -->
+          <label class="mb-4 flex items-start gap-3 rounded-md bg-blue-50 p-3 text-sm text-blue-700 dark:bg-blue-900/20 dark:text-blue-300">
+            <input
+              v-model="editForm.kiro_auto_sticky_enabled"
+              type="checkbox"
+              class="mt-0.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            <span>
+              <span class="block text-xs font-medium text-blue-700 dark:text-blue-400">
+                {{ t("admin.groups.kiroCache.stickyRouting") }}
+              </span>
+              <span class="mt-1 block text-xs text-blue-600 dark:text-blue-300">
+                {{ t("admin.groups.kiroCache.stickyRoutingHint") }}
+              </span>
+            </span>
+          </label>
+          <div v-if="editForm.kiro_auto_sticky_enabled" class="mb-4">
+            <label class="input-label">{{ t("admin.groups.kiroCache.stickyTTL") }}</label>
+            <input
+              v-model.number="editForm.kiro_sticky_session_ttl_seconds"
+              type="number"
+              step="60"
+              min="60"
+              max="86400"
+              class="input"
+              placeholder="3600"
+            />
+            <p class="input-hint">{{ t("admin.groups.kiroCache.stickyTTLHint") }}</p>
+          </div>
           <label class="block mb-2 font-medium text-gray-700 dark:text-gray-300">
             {{ t("admin.groups.kiroCache.title") }}
           </label>
@@ -1968,6 +2034,14 @@
               placeholder="1"
             />
             <p class="input-hint">{{ t("admin.groups.kiroCache.ratioHint") }}</p>
+          </div>
+          <div class="mt-3">
+            <label class="input-label">{{ t("admin.groups.kiroCache.endpointMode") }}</label>
+            <select v-model="editForm.kiro_endpoint_mode" class="input">
+              <option value="q">{{ t("admin.groups.kiroCache.endpointModeQ") }}</option>
+              <option value="krs">{{ t("admin.groups.kiroCache.endpointModeKRS") }}</option>
+            </select>
+            <p class="input-hint">{{ t("admin.groups.kiroCache.endpointModeHint") }}</p>
           </div>
         </div>
 
@@ -3420,7 +3494,10 @@ const createForm = reactive({
   rpm_limit: 0 as number,
   // Kiro 模拟缓存配置（仅 Kiro 平台）
   kiro_cache_emulation_enabled: false,
+  kiro_auto_sticky_enabled: true,
+  kiro_sticky_session_ttl_seconds: 3600,
   kiro_cache_emulation_ratio: 1,
+  kiro_endpoint_mode: "q" as "q" | "krs",
 });
 
 // 简单账号类型（用于模型路由选择）
@@ -3755,7 +3832,10 @@ const editForm = reactive({
   rpm_limit: 0 as number,
   // Kiro 模拟缓存配置（仅 Kiro 平台）
   kiro_cache_emulation_enabled: false,
+  kiro_auto_sticky_enabled: true,
+  kiro_sticky_session_ttl_seconds: 3600,
   kiro_cache_emulation_ratio: 1,
+  kiro_endpoint_mode: "q" as "q" | "krs",
 });
 
 type ImagePricingFormState = {
@@ -3994,7 +4074,10 @@ const closeCreateModal = () => {
   createForm.copy_accounts_from_group_ids = [];
   createForm.rpm_limit = 0;
   createForm.kiro_cache_emulation_enabled = false;
+  createForm.kiro_auto_sticky_enabled = true;
+  createForm.kiro_sticky_session_ttl_seconds = 3600;
   createForm.kiro_cache_emulation_ratio = 1;
+  createForm.kiro_endpoint_mode = "q";
   resetModelsListState(createModelsListState);
   createModelRoutingRules.value = [];
 };
@@ -4026,6 +4109,16 @@ const normalizeImageRateMultiplier = (
   }
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 1;
+};
+
+const normalizeKiroStickySessionTTL = (
+  value: number | string | null | undefined,
+): number => {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return 3600;
+  }
+  return Math.min(86400, Math.max(60, Math.trunc(seconds)));
 };
 
 const handleCreateGroup = async () => {
@@ -4075,8 +4168,15 @@ const handleCreateGroup = async () => {
       requestData.image_rate_multiplier,
     );
     if (requestData.platform !== "kiro") {
+      requestData.kiro_auto_sticky_enabled = false;
+      requestData.kiro_sticky_session_ttl_seconds = 0;
       requestData.kiro_cache_emulation_enabled = false;
       requestData.kiro_cache_emulation_ratio = 0;
+      requestData.kiro_endpoint_mode = "q";
+    } else {
+      requestData.kiro_sticky_session_ttl_seconds = normalizeKiroStickySessionTTL(
+        requestData.kiro_sticky_session_ttl_seconds,
+      );
     }
     await adminAPI.groups.create(requestData);
     appStore.showSuccess(t("admin.groups.groupCreated"));
@@ -4141,8 +4241,13 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.mcp_xml_inject = group.mcp_xml_inject ?? true;
   editForm.copy_accounts_from_group_ids = []; // 复制账号字段每次编辑时重置为空
   editForm.rpm_limit = group.rpm_limit ?? 0;
+  editForm.kiro_auto_sticky_enabled =
+    group.kiro_auto_sticky_enabled ?? group.platform === "kiro";
+  editForm.kiro_sticky_session_ttl_seconds =
+    group.kiro_sticky_session_ttl_seconds ?? 3600;
   editForm.kiro_cache_emulation_enabled = group.kiro_cache_emulation_enabled ?? false;
   editForm.kiro_cache_emulation_ratio = group.kiro_cache_emulation_ratio ?? 1;
+  editForm.kiro_endpoint_mode = group.kiro_endpoint_mode === "krs" ? "krs" : "q";
   resetModelsListState(editModelsListState, group.models_list_config);
   // 加载模型路由规则（异步加载账号名称）
   editModelRoutingRules.value = await convertApiFormatToRoutingRules(
@@ -4220,8 +4325,15 @@ const handleUpdateGroup = async () => {
       payload.image_rate_multiplier,
     );
     if (payload.platform !== "kiro") {
+      payload.kiro_auto_sticky_enabled = false;
+      payload.kiro_sticky_session_ttl_seconds = 0;
       payload.kiro_cache_emulation_enabled = false;
       payload.kiro_cache_emulation_ratio = 0;
+      payload.kiro_endpoint_mode = "q";
+    } else {
+      payload.kiro_sticky_session_ttl_seconds = normalizeKiroStickySessionTTL(
+        payload.kiro_sticky_session_ttl_seconds,
+      );
     }
     await adminAPI.groups.update(editingGroup.value.id, payload);
     appStore.showSuccess(t("admin.groups.groupUpdated"));

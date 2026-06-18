@@ -13,7 +13,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -81,6 +83,7 @@ type Usage struct {
 	CacheCreationInputTokens   int
 	CacheCreation5mInputTokens int
 	CacheCreation1hInputTokens int
+	KiroCredits                float64
 }
 
 type StreamResult struct {
@@ -111,9 +114,10 @@ type KiroBuildResult struct {
 }
 
 type KiroPayload struct {
-	ConversationState KiroConversationState `json:"conversationState"`
-	ProfileArn        string                `json:"profileArn,omitempty"`
-	InferenceConfig   *KiroInferenceConfig  `json:"inferenceConfig,omitempty"`
+	ConversationState            KiroConversationState `json:"conversationState"`
+	ProfileArn                   string                `json:"profileArn,omitempty"`
+	InferenceConfig              *KiroInferenceConfig  `json:"inferenceConfig,omitempty"`
+	AdditionalModelRequestFields map[string]any        `json:"additionalModelRequestFields,omitempty"`
 }
 
 type KiroInferenceConfig struct {
@@ -262,8 +266,43 @@ func MapModel(model string) string {
 	case "claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001-thinking", "claude-haiku-4.5":
 		return "claude-haiku-4.5"
 	default:
+		// P3: 通用 Claude 版本号归一化 — 将 claude-{family}-{major}-{minor} 中的
+		// 最后一段短横线转为点号（如 claude-opus-4-9 → claude-opus-4.9），
+		// 兼容不支持 "." 的客户端（如 Claude Code 会把 "4.6" 写成 "4-6"）。
+		// 仅对 version >= 4.6 做归一化（4.5 及以下有带日期后缀的 case，不应该歧义匹配）。
+		normalized := normalizeClaudeVersionNumber(strings.TrimSpace(strings.ToLower(model)))
+		if normalized != strings.TrimSpace(strings.ToLower(model)) {
+			return normalized
+		}
 		return ""
 	}
+}
+
+// normalizeClaudeVersionNumber 将 claude-{family}-{major}-{minor} 格式中的最后一段
+// 版本短横线转为点号。仅适用于 version >= 4.6（避免歧义匹配 4-5 等旧格式）。
+// 例如：claude-opus-4-9 → claude-opus-4.9, claude-opus-4-9-thinking → claude-opus-4.9
+var claudeVersionNormalizePattern = regexp.MustCompile(
+	`^(claude-(?:sonnet|haiku|opus))-(\d+)-(\d{1,2})(?:-thinking)?$`,
+)
+
+var claudeDottedVersionPattern = regexp.MustCompile(
+	`^(claude-(?:sonnet|haiku|opus))-(\d+)\.(\d{1,2})(?:-thinking)?$`,
+)
+
+func normalizeClaudeVersionNumber(model string) string {
+	// 去除 -thinking 后缀做匹配
+	base := strings.TrimSuffix(model, "-thinking")
+	matches := claudeVersionNormalizePattern.FindStringSubmatch(base)
+	if matches == nil {
+		return model
+	}
+	major, _ := strconv.Atoi(matches[2])
+	minor, _ := strconv.Atoi(matches[3])
+	// 仅对 >= 4.6 做归一化；4.5 及以下有带日期后缀的明确 case，不应该在这里歧义匹配
+	if major < 4 || (major == 4 && minor < 6) {
+		return model
+	}
+	return matches[1] + "-" + matches[2] + "." + matches[3]
 }
 
 // requiresImplicitThinkingTagStripping 判断是否需要在客户端未显式请求 thinking 时
@@ -445,8 +484,9 @@ func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin 
 			CurrentMessage:  currentMessage,
 			History:         history,
 		},
-		ProfileArn:      profileArn,
-		InferenceConfig: inferenceConfig,
+		ProfileArn:                   profileArn,
+		InferenceConfig:              inferenceConfig,
+		AdditionalModelRequestFields: buildAdditionalModelRequestFields(thinking, modelID),
 	}
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -1146,6 +1186,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		"cache_read_input_tokens":     usage.CacheReadInputTokens,
 		"cache_creation_input_tokens": usage.CacheCreationInputTokens,
 	}
+	if usage.KiroCredits > 0 {
+		finalUsageMap["_sub2api_kiro_credits"] = usage.KiroCredits
+	}
 	addKiroCacheUsageFields(finalUsageMap, usage)
 	if err := writeEvent("message_delta", map[string]any{
 		"type": "message_delta",
@@ -1297,8 +1340,10 @@ func renderKiroBuiltinIdentityPrompt(identity string) string {
 
 func buildInjectedSystemPrompt(systemPrompt string, thinking *thinkingDirective, toolChoiceHint string) string {
 	systemPrompt = strings.TrimSpace(systemPrompt)
-	timestampContext := fmt.Sprintf("[Context: Current time is %s]", time.Now().Format("2006-01-02 15:04:05 MST"))
-	promptParts := []string{renderKiroBuiltinIdentityPrompt(""), timestampContext}
+	promptParts := []string{renderKiroBuiltinIdentityPrompt("")}
+	if temporalContext := buildKiroTemporalContext(); temporalContext != "" {
+		promptParts = append(promptParts, temporalContext)
+	}
 	if systemPrompt != "" {
 		promptParts = append(promptParts, systemPrompt)
 	}
@@ -1331,6 +1376,92 @@ func buildInjectedSystemPrompt(systemPrompt string, thinking *thinkingDirective,
 		}
 	}
 	return systemPrompt
+}
+
+func buildKiroTemporalContext() string {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("SUB2API_KIRO_TIME_CONTEXT"))) {
+	case "date", "day":
+		return fmt.Sprintf("[Context: Current date is %s]", time.Now().Format("2006-01-02 MST"))
+	case "precise", "time", "full":
+		return fmt.Sprintf("[Context: Current time is %s]", time.Now().Format("2006-01-02 15:04:05 MST"))
+	default:
+		return ""
+	}
+}
+
+// buildAdditionalModelRequestFields 构建 Kiro payload 的 additionalModelRequestFields。
+// 对 Claude 4.6+ 模型，使用 output_config.effort 路径（官方 Kiro IDE 的 kr() 逻辑）：
+//
+//	output_config 路径 → { thinking: {type:'adaptive',display:'summarized'}, output_config: {effort} }
+//
+// 对于旧模型或 enabled 模式，不注入（依赖 system prompt 标签兜底）。
+//
+// 这实现了管理器的 P1 功能：确保 Claude 4.6+ 新模型的 thinking 使用 effort-based 控制。
+func buildAdditionalModelRequestFields(thinking *thinkingDirective, modelID string) map[string]any {
+	if thinking == nil {
+		return nil
+	}
+	// 判断是否是 output_config 路径的模型（Claude 4.6+）
+	if !isOutputConfigPathModel(modelID) {
+		return nil
+	}
+	if thinking.Mode == "adaptive" {
+		effort := strings.TrimSpace(thinking.Effort)
+		if effort == "" {
+			effort = "high"
+		}
+		return map[string]any{
+			"thinking":      map[string]any{"type": "adaptive", "display": "summarized"},
+			"output_config": map[string]any{"effort": effort},
+		}
+	}
+	// enabled 模式对 output_config 路径模型也映射为 adaptive + effort
+	if thinking.Mode == "enabled" {
+		effort := budgetToEffort(thinking.BudgetTokens)
+		return map[string]any{
+			"thinking":      map[string]any{"type": "adaptive", "display": "summarized"},
+			"output_config": map[string]any{"effort": effort},
+		}
+	}
+	return nil
+}
+
+// isOutputConfigPathModel 判断模型是否使用 output_config 路径（Claude 4.6+）。
+// 这是基于已知模型列表的静态判断，未来可改为动态从 ListAvailableModels 发现。
+func isOutputConfigPathModel(modelID string) bool {
+	normalized := normalizeClaudeVersionNumber(strings.ToLower(strings.TrimSpace(modelID)))
+	// Claude 4.6+ 所有模型使用 output_config 路径
+	for _, prefix := range []string{"claude-opus-4.6", "claude-opus-4.7", "claude-opus-4.8",
+		"claude-sonnet-4.6", "claude-sonnet-4.7", "claude-sonnet-4.8",
+		"claude-haiku-4.6", "claude-haiku-4.7", "claude-haiku-4.8"} {
+		if normalized == prefix || strings.HasPrefix(normalized, prefix+"-") || strings.HasPrefix(normalized, prefix+".") {
+			return true
+		}
+	}
+	// 通用兜底：版本号 >= 4.6 的 Claude 模型（处理未来新版本）
+	if matches := claudeDottedVersionPattern.FindStringSubmatch(normalized); matches != nil {
+		major, _ := strconv.Atoi(matches[2])
+		minor, _ := strconv.Atoi(matches[3])
+		if major > 4 || (major == 4 && minor >= 6) {
+			return true
+		}
+	}
+	return false
+}
+
+// budgetToEffort 将 thinking budget_tokens 粗略映射为 effort 等级。
+// 参考管理器的映射规则。
+func budgetToEffort(budgetTokens int) string {
+	switch {
+	case budgetTokens <= 4000:
+		return "low"
+	case budgetTokens <= 16000:
+		return "medium"
+	case budgetTokens <= 64000:
+		return "high"
+	default:
+		return "xhigh"
+	}
 }
 
 func extractClaudeToolChoiceHint(claudeBody []byte, requestCtx *KiroRequestContext) string {
@@ -3515,7 +3646,7 @@ func extractSemanticEvents(eventType string, event map[string]any, lastContentFr
 				SourceStopReason: sourceStopReason,
 			})
 		}
-	case "messageMetadataEvent", "metadataEvent", "supplementaryWebLinksEvent", "usageEvent", "messageStopEvent", "message_stop":
+	case "messageMetadataEvent", "metadataEvent", "supplementaryWebLinksEvent", "usageEvent", "messageStopEvent", "message_stop", "meteringEvent":
 		out = append(out, kiroSemanticEvent{
 			Type:             kiroSemanticUsage,
 			SourceEventType:  eventType,
@@ -3921,13 +4052,11 @@ func updateUsageFromEvent(usage *Usage, eventType string, event map[string]any) 
 		}
 		if value, ok := toInt(tokenUsage["cacheReadInputTokens"]); ok {
 			usage.CacheReadInputTokens = value
-			if usage.InputTokens == 0 {
-				usage.InputTokens = value
-			} else {
-				usage.InputTokens += value
-			}
 		}
+		updateKiroCreditsFromMap(usage, tokenUsage)
 	}
+	updateKiroCreditsFromMap(usage, event)
+	updateKiroCreditsFromMap(usage, meta)
 	if value, ok := toInt(event["inputTokens"]); ok && value > 0 {
 		usage.InputTokens = value
 	}
@@ -3945,6 +4074,13 @@ func updateUsageFromEvent(usage *Usage, eventType string, event map[string]any) 
 	}
 	if value, ok := toInt(meta["totalTokens"]); ok && value > 0 {
 		usage.TotalTokens = value
+	}
+	if eventType == "meteringEvent" {
+		if value, ok := toPositiveFiniteFloat(meta["usage"]); ok {
+			usage.KiroCredits += value
+		} else if value, ok := toPositiveFiniteFloat(event["usage"]); ok {
+			usage.KiroCredits += value
+		}
 	}
 }
 
@@ -4008,6 +4144,60 @@ func toInt(value any) (int, bool) {
 	default:
 		return 0, false
 	}
+}
+
+var kiroCreditUsageFieldNames = [...]string{
+	"kiroCredits",
+	"credits",
+	"creditsUsed",
+	"creditUsage",
+	"consumedCredits",
+}
+
+func updateKiroCreditsFromMap(usage *Usage, values map[string]any) {
+	if usage == nil || len(values) == 0 {
+		return
+	}
+	for _, field := range kiroCreditUsageFieldNames {
+		value, ok := toPositiveFiniteFloat(values[field])
+		if !ok {
+			continue
+		}
+		usage.KiroCredits = value
+		return
+	}
+}
+
+func toPositiveFiniteFloat(value any) (float64, bool) {
+	var out float64
+	switch v := value.(type) {
+	case float64:
+		out = v
+	case float32:
+		out = float64(v)
+	case int:
+		out = float64(v)
+	case int64:
+		out = float64(v)
+	case json.Number:
+		parsed, err := v.Float64()
+		if err != nil {
+			return 0, false
+		}
+		out = parsed
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		if err != nil {
+			return 0, false
+		}
+		out = parsed
+	default:
+		return 0, false
+	}
+	if math.IsNaN(out) || math.IsInf(out, 0) || out <= 0 {
+		return 0, false
+	}
+	return out, true
 }
 
 func mergeKiroCacheEmulationUsage(base Usage, simulated *Usage) Usage {
