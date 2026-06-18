@@ -9,13 +9,17 @@ import (
 	"io"
 	mathrand "math/rand"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/cespare/xxhash/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 	"go.uber.org/zap"
 )
 
@@ -353,7 +357,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 
 	modelID := kiropkg.MapModel(mappedModel)
 	currentToken := token
-	buildResult, err := s.buildKiroPayloadForAccount(ctx, account, anthropicBody, modelID, currentToken, requestModel, headers)
+	buildResult, err := s.buildKiroPayloadForAccount(ctx, account, parsed, anthropicBody, modelID, currentToken, requestModel, headers)
 	if err != nil {
 		return nil, requestCtx, err
 	}
@@ -361,7 +365,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 	requestCtx = buildResult.Context
 	logKiroStatelessReplay(account, buildResult.Payload)
 
-	endpoints := buildKiroEndpoints(account)
+	endpoints := buildKiroEndpoints(account, kiroEndpointModeForRequest(parsed))
 	proxyURL := kiroProxyURL(account)
 	tlsProfile := s.tlsFPProfileService.ResolveTLSProfile(account)
 	accountKey := buildKiroAccountKey(account)
@@ -386,7 +390,9 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 			}
 
 			if resp.StatusCode == http.StatusTooManyRequests {
-				cooldown, err := s.markKiro429(ctx, accountKey)
+				dumpKiro429ResponseForDebug(resp, account.ID, endpoint.URL, endpoint.Name)
+
+				cooldown, err := s.markKiro429(ctx, account.ID, accountKey)
 				if err != nil {
 					_ = resp.Body.Close()
 					return nil, requestCtx, err
@@ -457,7 +463,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 					if refreshErr == nil && strings.TrimSpace(refreshedToken) != "" {
 						currentToken = refreshedToken
 						accountKey = buildKiroAccountKey(account)
-						buildResult, err = s.buildKiroPayloadForAccount(ctx, account, anthropicBody, modelID, currentToken, requestModel, headers)
+						buildResult, err = s.buildKiroPayloadForAccount(ctx, account, parsed, anthropicBody, modelID, currentToken, requestModel, headers)
 						if err != nil {
 							return nil, requestCtx, err
 						}
@@ -496,7 +502,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 			}
 
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				if err := s.markKiroSuccess(ctx, accountKey); err != nil {
+				if err := s.markKiroSuccess(ctx, account.ID, accountKey); err != nil {
 					_ = resp.Body.Close()
 					return nil, requestCtx, err
 				}
@@ -507,7 +513,19 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 	return nil, requestCtx, fmt.Errorf("kiro upstream endpoints exhausted")
 }
 
-func buildKiroEndpoints(account *Account) []kiroEndpointConfig {
+// kiroKRSEndpointURL 是 Kiro 自家前置网关（KRS = Kiro Runtime Service）的固定 URL。
+// KRS 仅支持 us-east-1 / eu-central-1 两个 region；这里固定走 us-east-1。
+const kiroKRSEndpointURL = "https://runtime.us-east-1.kiro.dev/generateAssistantResponse"
+
+func buildKiroEndpoints(account *Account, mode string) []kiroEndpointConfig {
+	if mode == KiroEndpointModeKRS {
+		return []kiroEndpointConfig{
+			{
+				URL:  kiroKRSEndpointURL,
+				Name: "KiroRuntime",
+			},
+		}
+	}
 	region := kiroAPIRegion(account)
 	return []kiroEndpointConfig{
 		{
@@ -517,25 +535,129 @@ func buildKiroEndpoints(account *Account) []kiroEndpointConfig {
 	}
 }
 
-func (s *GatewayService) buildKiroPayloadForAccount(ctx context.Context, account *Account, anthropicBody []byte, modelID, token, requestModel string, headers http.Header) (*kiropkg.KiroBuildResult, error) {
+// kiroEndpointModeForRequest 从 ParsedRequest 取 group 配置的 Kiro endpoint 模式；
+// parsed/Group 为 nil 时安全兜底为 "q"。
+func kiroEndpointModeForRequest(parsed *ParsedRequest) string {
+	if parsed == nil || parsed.Group == nil {
+		return KiroEndpointModeQ
+	}
+	return parsed.Group.EffectiveKiroEndpointMode()
+}
+
+func (s *GatewayService) buildKiroPayloadForAccount(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID, token, requestModel string, headers http.Header) (*kiropkg.KiroBuildResult, error) {
 	_ = s
 	_ = ctx
 	_ = token
 	profileArn := resolveKiroPayloadProfileArn(account)
 	anthropicBody = prepareKiroPayloadBodyForRequestModel(anthropicBody, requestModel)
-	return kiropkg.BuildKiroPayloadWithContext(anthropicBody, modelID, profileArn, "AI_EDITOR", headers)
+	buildResult, err := kiropkg.BuildKiroPayloadWithContext(anthropicBody, modelID, profileArn, "AI_EDITOR", headers)
+	if err != nil {
+		return nil, err
+	}
+	if stableID := stableKiroConversationID(account, parsed, anthropicBody, modelID, profileArn); stableID != "" {
+		if next, setErr := sjson.SetBytes(buildResult.Payload, "conversationState.conversationId", stableID); setErr == nil {
+			buildResult.Payload = next
+		}
+	}
+	return buildResult, nil
+}
+
+func stableKiroConversationID(account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID, profileArn string) string {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("SUB2API_KIRO_CONVERSATION_ID_MODE"))) {
+	case "random", "uuid", "off", "false", "0":
+		return ""
+	}
+	seed := stableKiroConversationSeed(account, parsed, anthropicBody, modelID, profileArn)
+	if seed == "" {
+		return ""
+	}
+	return generateSessionUUID(seed)
+}
+
+func stableKiroConversationSeed(account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID, profileArn string) string {
+	var anchorType, anchor string
+	if parsed != nil {
+		if explicitID := strings.TrimSpace(parsed.ExplicitSessionID); explicitID != "" {
+			anchorType, anchor = "explicit", explicitID
+		} else if metadataUserID := strings.TrimSpace(parsed.MetadataUserID); metadataUserID != "" {
+			anchorType, anchor = "metadata", metadataUserID
+		} else if systemText := extractTextFromSystemRaw(parsed.SystemRaw()); systemText != "" {
+			anchorType, anchor = "system", systemText
+		}
+	}
+	if anchor == "" && len(anthropicBody) > 0 {
+		if systemText := extractTextFromSystemRaw([]byte(gjson.GetBytes(anthropicBody, "system").Raw)); systemText != "" {
+			anchorType, anchor = "system", systemText
+		} else if firstUserText := extractFirstUserText(anthropicBody); firstUserText != "" {
+			anchorType, anchor = "first_user", firstUserText
+		}
+	}
+	if anchor == "" {
+		return ""
+	}
+
+	var sb strings.Builder
+	_, _ = sb.WriteString("kiro-conversation-v1|")
+	if account != nil {
+		_, _ = sb.WriteString("account:")
+		_, _ = sb.WriteString(strconv.FormatInt(account.ID, 10))
+		_, _ = sb.WriteString("|credential:")
+		_, _ = sb.WriteString(kiroCacheCredentialIdentity(account))
+		_, _ = sb.WriteString("|")
+	}
+	if parsed != nil && parsed.SessionContext != nil {
+		_, _ = sb.WriteString("api_key:")
+		_, _ = sb.WriteString(strconv.FormatInt(parsed.SessionContext.APIKeyID, 10))
+		_, _ = sb.WriteString("|")
+	}
+	_, _ = sb.WriteString("model:")
+	_, _ = sb.WriteString(strings.TrimSpace(modelID))
+	_, _ = sb.WriteString("|profile:")
+	_, _ = sb.WriteString(strings.TrimSpace(profileArn))
+	_, _ = sb.WriteString("|anchor:")
+	_, _ = sb.WriteString(anchorType)
+	_, _ = sb.WriteString(":")
+	_, _ = sb.WriteString(anchor)
+	return sb.String()
 }
 
 func logKiroStatelessReplay(account *Account, payload []byte) {
 	if account == nil {
 		return
 	}
+	conversationID := gjson.GetBytes(payload, "conversationState.conversationId").String()
+	systemPrompt := gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String()
+	currentContent := gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String()
 	logger.L().Info("kiro.stateless_replay",
 		zap.Int64("selected_account_id", account.ID),
 		zap.Bool("stateless_replay", true),
 		zap.Int("history_count", len(gjson.GetBytes(payload, "conversationState.history").Array())),
 		zap.Bool("has_agent_continuation_id", gjson.GetBytes(payload, "conversationState.agentContinuationId").Exists()),
+		zap.String("conversation_id_hash", hashKiroLogString(conversationID)),
+		zap.String("payload_hash_no_conversation_id", hashKiroPayloadWithoutConversationID(payload)),
+		zap.String("system_prompt_hash", hashKiroLogString(systemPrompt)),
+		zap.Int("system_prompt_len", len(systemPrompt)),
+		zap.String("current_content_hash", hashKiroLogString(currentContent)),
+		zap.Int("tool_count", len(gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools").Array())),
 	)
+}
+
+func hashKiroPayloadWithoutConversationID(payload []byte) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	normalized := payload
+	if next, err := sjson.DeleteBytes(payload, "conversationState.conversationId"); err == nil {
+		normalized = next
+	}
+	return strconv.FormatUint(xxhash.Sum64(normalized), 36)
+}
+
+func hashKiroLogString(value string) string {
+	if value == "" {
+		return ""
+	}
+	return strconv.FormatUint(xxhash.Sum64String(value), 36)
 }
 
 func prepareKiroPayloadBodyForRequestModel(anthropicBody []byte, requestModel string) []byte {
@@ -627,6 +749,7 @@ func kiroUsageToClaude(usage kiropkg.Usage, fallbackInput int) ClaudeUsage {
 		CacheCreationInputTokens: usage.CacheCreationInputTokens,
 		CacheCreation5mTokens:    usage.CacheCreation5mInputTokens,
 		CacheCreation1hTokens:    usage.CacheCreation1hInputTokens,
+		KiroCredits:              usage.KiroCredits,
 	}
 }
 
@@ -686,7 +809,11 @@ func (s *GatewayService) handleKiroHTTPError(ctx context.Context, resp *http.Res
 			Kind:               "failover",
 			Message:            upstreamMsg,
 		})
-		if s.rateLimitService != nil {
+		// 429 已经被 executeKiroUpstreamWithParsed → markKiro429 完整处理（Redis 1-5min
+		// 指数退避 + DB rate_limit_reset_at 同步）。这里再走 HandleUpstreamError 会进入
+		// handle429 → apply429FallbackRateLimit，把 DB cooldown 反写成 5s flat，
+		// 直接抹掉我们刚算好的退避时长。所以 429 跳过通用 handler。
+		if s.rateLimitService != nil && resp.StatusCode != http.StatusTooManyRequests {
 			s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
 		}
 		return &UpstreamFailoverError{
@@ -776,6 +903,57 @@ func logKiroBadRequestClassification(classification kiroErrorClassification, acc
 		zap.String("model", strings.TrimSpace(model)),
 		zap.String("request_id", headers.Get("x-request-id")),
 		zap.String("body_excerpt", truncateForLog(body, 512)),
+	)
+}
+
+// dumpKiro429ResponseForDebug captures the first 2KB of a Kiro 429 response body
+// and the rate-limit-relevant headers, then restores resp.Body so the caller can
+// still consume it. Used to investigate whether Kiro returns a reset-time field
+// (e.g. nextDateReset) we should parse instead of falling back to fixed cooldown.
+func dumpKiro429ResponseForDebug(resp *http.Response, accountID int64, endpointURL, endpointName string) {
+	if resp == nil || resp.Body == nil {
+		return
+	}
+	const maxBytes = 2048
+	limited := io.LimitReader(resp.Body, maxBytes+1)
+	sample, err := io.ReadAll(limited)
+	if err != nil {
+		logger.L().Warn("kiro.429_debug_read_failed",
+			zap.Int64("account_id", accountID),
+			zap.String("endpoint", endpointName),
+			zap.Error(err),
+		)
+		_ = resp.Body.Close()
+		resp.Body = io.NopCloser(bytes.NewReader(nil))
+		return
+	}
+	truncated := false
+	if len(sample) > maxBytes {
+		sample = sample[:maxBytes]
+		truncated = true
+	}
+	rest, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	resp.Body = io.NopCloser(bytes.NewReader(append(append([]byte{}, sample...), rest...)))
+
+	headers := map[string]string{}
+	for k, v := range resp.Header {
+		lk := strings.ToLower(k)
+		if strings.Contains(lk, "ratelimit") || strings.Contains(lk, "retry") || strings.Contains(lk, "reset") ||
+			lk == "content-type" || lk == "x-amzn-requestid" || lk == "x-amzn-errortype" {
+			headers[k] = strings.Join(v, ",")
+		}
+	}
+
+	logger.L().Warn("kiro.429_raw_response",
+		zap.Int64("account_id", accountID),
+		zap.String("endpoint_url", endpointURL),
+		zap.String("endpoint_name", endpointName),
+		zap.String("content_type", resp.Header.Get("Content-Type")),
+		zap.Any("relevant_headers", headers),
+		zap.Int("body_bytes", len(sample)),
+		zap.Bool("truncated", truncated),
+		zap.String("body_sample", string(sample)),
 	)
 }
 

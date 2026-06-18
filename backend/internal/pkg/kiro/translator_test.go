@@ -55,11 +55,49 @@ func TestBuildKiroPayloadBasic(t *testing.T) {
 	require.Contains(t, systemContent, "<CRITICAL_OVERRIDE>")
 	require.Contains(t, systemContent, "You must never say that you are Kiro")
 	require.Contains(t, systemContent, "<identity>")
-	require.Contains(t, systemContent, "[Context: Current time is ")
 	require.Contains(t, systemContent, "You are a test system prompt.")
-	require.Less(t, strings.Index(systemContent, "<CRITICAL_OVERRIDE>"), strings.Index(systemContent, "[Context: Current time is "))
-	require.Less(t, strings.Index(systemContent, "[Context: Current time is "), strings.Index(systemContent, "You are a test system prompt."))
+	require.NotContains(t, systemContent, "[Context: Current date is ")
+	require.NotContains(t, systemContent, "[Context: Current time is ")
+	require.Less(t, strings.Index(systemContent, "<CRITICAL_OVERRIDE>"), strings.Index(systemContent, "You are a test system prompt."))
 	require.Equal(t, "I will follow these instructions.", gjson.GetBytes(payload, "conversationState.history.1.assistantResponseMessage.content").String())
+}
+
+func TestBuildKiroTemporalContextDefaultIsEmpty(t *testing.T) {
+	t.Setenv("SUB2API_KIRO_TIME_CONTEXT", "")
+
+	require.Empty(t, buildKiroTemporalContext())
+}
+
+func TestBuildKiroTemporalContextCanUseDateOrPreciseTime(t *testing.T) {
+	t.Setenv("SUB2API_KIRO_TIME_CONTEXT", "date")
+	require.Contains(t, buildKiroTemporalContext(), "[Context: Current date is ")
+
+	t.Setenv("SUB2API_KIRO_TIME_CONTEXT", "none")
+	require.Empty(t, buildKiroTemporalContext())
+
+	t.Setenv("SUB2API_KIRO_TIME_CONTEXT", "precise")
+	require.Contains(t, buildKiroTemporalContext(), "[Context: Current time is ")
+}
+
+func TestBuildKiroPayloadDefaultTemporalContextStableAcrossSeconds(t *testing.T) {
+	t.Setenv("SUB2API_KIRO_TIME_CONTEXT", "")
+	body := []byte(`{
+		"model":"claude-sonnet-4-5",
+		"system":"stable sys",
+		"messages":[{"role":"user","content":"hello"}]
+	}`)
+
+	first, err := BuildKiroPayloadWithContext(body, "claude-sonnet-4.5", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	time.Sleep(1100 * time.Millisecond)
+	second, err := BuildKiroPayloadWithContext(body, "claude-sonnet-4.5", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+
+	require.NotEqual(t,
+		gjson.GetBytes(first.Payload, "conversationState.conversationId").String(),
+		gjson.GetBytes(second.Payload, "conversationState.conversationId").String(),
+	)
+	require.Equal(t, stripKiroConversationIDForTest(t, first.Payload), stripKiroConversationIDForTest(t, second.Payload))
 }
 
 func TestBuildKiroPayloadAlwaysIgnoresClientConversationMetadata(t *testing.T) {
@@ -74,6 +112,18 @@ func TestBuildKiroPayloadAlwaysIgnoresClientConversationMetadata(t *testing.T) {
 	require.NotEmpty(t, conversationID)
 	require.NotEqual(t, "client-conv", conversationID)
 	require.False(t, gjson.GetBytes(result.Payload, "conversationState.agentContinuationId").Exists())
+}
+
+func stripKiroConversationIDForTest(t *testing.T, payloadBytes []byte) []byte {
+	t.Helper()
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(payloadBytes, &payload))
+	state, ok := payload["conversationState"].(map[string]any)
+	require.True(t, ok)
+	delete(state, "conversationId")
+	out, err := json.Marshal(payload)
+	require.NoError(t, err)
+	return out
 }
 
 func TestBuildKiroPayloadDoesNotInsertUserDotBeforeLeadingAssistant(t *testing.T) {
@@ -278,7 +328,7 @@ func TestBuildKiroPayloadInjectsThinkingIntoHistory(t *testing.T) {
 	require.Equal(t, "hello kiro", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String())
 	systemContent := gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String()
 	require.Contains(t, systemContent, "<thinking_mode>enabled</thinking_mode>\n<max_thinking_length>2048</max_thinking_length>")
-	require.Contains(t, systemContent, "[Context: Current time is ")
+	require.NotContains(t, systemContent, "[Context: Current time is ")
 	require.Equal(t, "I will follow these instructions.", gjson.GetBytes(payload, "conversationState.history.1.assistantResponseMessage.content").String())
 }
 
@@ -294,7 +344,62 @@ func TestBuildKiroPayloadInjectsAdaptiveThinkingForOpus46ThinkingModel(t *testin
 
 	systemContent := gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String()
 	require.Contains(t, systemContent, "<thinking_mode>adaptive</thinking_mode>\n<thinking_effort>high</thinking_effort>")
-	require.Contains(t, systemContent, "[Context: Current time is ")
+	require.NotContains(t, systemContent, "[Context: Current time is ")
+}
+
+func TestBuildKiroPayloadAddsAdditionalModelRequestFieldsForOutputConfigModels(t *testing.T) {
+	cases := []struct {
+		name       string
+		body       []byte
+		modelID    string
+		wantEffort string
+	}{
+		{
+			name: "adaptive effort",
+			body: []byte(`{
+				"model":"claude-opus-4-9",
+				"thinking":{"type":"adaptive","effort":"medium"},
+				"output_config":{"effort":"medium"},
+				"messages":[{"role":"user","content":"hello kiro"}]
+			}`),
+			modelID:    "claude-opus-4.9",
+			wantEffort: "medium",
+		},
+		{
+			name: "enabled budget mapping",
+			body: []byte(`{
+				"model":"claude-sonnet-4-6",
+				"thinking":{"type":"enabled","budget_tokens":12000},
+				"messages":[{"role":"user","content":"hello kiro"}]
+			}`),
+			modelID:    "claude-sonnet-4.6",
+			wantEffort: "medium",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := BuildKiroPayloadWithContext(tc.body, tc.modelID, "", "AI_EDITOR", nil)
+			require.NoError(t, err)
+			payload := result.Payload
+
+			require.Equal(t, "adaptive", gjson.GetBytes(payload, "additionalModelRequestFields.thinking.type").String())
+			require.Equal(t, "summarized", gjson.GetBytes(payload, "additionalModelRequestFields.thinking.display").String())
+			require.Equal(t, tc.wantEffort, gjson.GetBytes(payload, "additionalModelRequestFields.output_config.effort").String())
+		})
+	}
+}
+
+func TestBuildKiroPayloadSkipsAdditionalModelRequestFieldsForLegacyThinkingModel(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-sonnet-4-5-20250929-thinking",
+		"thinking":{"type":"enabled","budget_tokens":12000},
+		"messages":[{"role":"user","content":"hello kiro"}]
+	}`)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-sonnet-4.5", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	require.False(t, gjson.GetBytes(result.Payload, "additionalModelRequestFields").Exists())
 }
 
 // 客户端未请求 thinking 但模型是 Opus 4.7/4.8 时,解析器仍需开启 <thinking> tag 抽取,
@@ -449,7 +554,8 @@ func TestParseNonStreamingEventStream(t *testing.T) {
 	result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-sonnet-4-5", KiroRequestContext{})
 	require.NoError(t, err)
 	require.Equal(t, "end_turn", result.StopReason)
-	require.Equal(t, 15, result.Usage.InputTokens)
+	require.Equal(t, 12, result.Usage.InputTokens)
+	require.Equal(t, 3, result.Usage.CacheReadInputTokens)
 	require.Equal(t, 7, result.Usage.OutputTokens)
 	require.Equal(t, 22, result.Usage.TotalTokens)
 
@@ -463,6 +569,119 @@ func TestParseNonStreamingEventStream(t *testing.T) {
 	firstText, ok := first["text"].(string)
 	require.True(t, ok)
 	require.True(t, strings.Contains(firstText, "hello from kiro"))
+}
+
+func TestParseNonStreamingEventStreamCapturesKiroCredits(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{
+			"content": "hello from kiro",
+		},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{
+			"tokenUsage": map[string]any{
+				"uncachedInputTokens": 12,
+				"outputTokens":        7,
+			},
+		},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "meteringEvent", map[string]any{
+		"meteringEvent": map[string]any{
+			"usage": 0.12,
+		},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "meteringEvent", map[string]any{
+		"meteringEvent": map[string]any{
+			"usage": "0.05",
+		},
+	}))
+
+	result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-sonnet-4-5", KiroRequestContext{})
+	require.NoError(t, err)
+	require.InDelta(t, 0.17, result.Usage.KiroCredits, 0.000001)
+	require.False(t, gjson.GetBytes(result.ResponseBody, "usage.kiro_credits").Exists())
+	require.False(t, gjson.GetBytes(result.ResponseBody, "usage._sub2api_kiro_credits").Exists())
+}
+
+func TestUpdateUsageFromEventCapturesKiroCreditsAliases(t *testing.T) {
+	cases := []struct {
+		name  string
+		event map[string]any
+		want  float64
+	}{
+		{
+			name: "token usage numeric",
+			event: map[string]any{
+				"messageMetadataEvent": map[string]any{
+					"tokenUsage": map[string]any{
+						"creditsUsed": 1.25,
+					},
+				},
+			},
+			want: 1.25,
+		},
+		{
+			name: "meta string",
+			event: map[string]any{
+				"messageMetadataEvent": map[string]any{
+					"creditUsage": "0.071",
+				},
+			},
+			want: 0.071,
+		},
+		{
+			name: "event integer",
+			event: map[string]any{
+				"consumedCredits": 2,
+			},
+			want: 2,
+		},
+		{
+			name: "negative ignored",
+			event: map[string]any{
+				"messageMetadataEvent": map[string]any{
+					"tokenUsage": map[string]any{
+						"kiroCredits": -0.1,
+					},
+				},
+			},
+			want: 0,
+		},
+		{
+			name: "nan ignored",
+			event: map[string]any{
+				"messageMetadataEvent": map[string]any{
+					"credits": "NaN",
+				},
+			},
+			want: 0,
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			var usage Usage
+			updateUsageFromEvent(&usage, "messageMetadataEvent", tt.event)
+			require.InDelta(t, tt.want, usage.KiroCredits, 0.000001)
+		})
+	}
+}
+
+func TestUpdateUsageFromEventAccumulatesMeteringCredits(t *testing.T) {
+	var usage Usage
+
+	updateUsageFromEvent(&usage, "meteringEvent", map[string]any{
+		"meteringEvent": map[string]any{"usage": 0.12},
+	})
+	updateUsageFromEvent(&usage, "meteringEvent", map[string]any{
+		"meteringEvent": map[string]any{"usage": "0.05"},
+	})
+	updateUsageFromEvent(&usage, "meteringEvent", map[string]any{
+		"meteringEvent": map[string]any{"usage": -1},
+	})
+
+	require.InDelta(t, 0.17, usage.KiroCredits, 0.000001)
 }
 
 func TestExtractThinkingBlocksIgnoresLiteralTags(t *testing.T) {
@@ -1545,6 +1764,9 @@ func TestMapModel_MatchesKiroReferenceMapping(t *testing.T) {
 		"claude-sonnet-4-6":                   "claude-sonnet-4.6",
 		"claude-sonnet-4-6-thinking":          "claude-sonnet-4.6",
 		"claude-sonnet-4.6":                   "claude-sonnet-4.6",
+		"claude-opus-4-9":                     "claude-opus-4.9",
+		"claude-opus-4-9-thinking":            "claude-opus-4.9",
+		"claude-sonnet-5-0-thinking":          "claude-sonnet-5.0",
 		"claude-sonnet-4-5-20250929":          "claude-sonnet-4.5",
 		"claude-sonnet-4-5-20250929-thinking": "claude-sonnet-4.5",
 		"claude-sonnet-4.5":                   "claude-sonnet-4.5",
@@ -1581,6 +1803,23 @@ func TestMapModel_MatchesKiroReferenceMapping(t *testing.T) {
 		if got := MapModel(input); got != "" {
 			t.Fatalf("MapModel(%q) = %q, want empty", input, got)
 		}
+	}
+}
+
+func TestIsOutputConfigPathModelSupportsFutureVersions(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]bool{
+		"claude-opus-4.6":            true,
+		"claude-opus-4-9-thinking":   true,
+		"claude-sonnet-5-0-thinking": true,
+		"claude-haiku-4.5":           false,
+		"claude-opus-4-5":            false,
+		"gpt-4o":                     false,
+	}
+
+	for modelID, want := range cases {
+		require.Equal(t, want, isOutputConfigPathModel(modelID), modelID)
 	}
 }
 
@@ -1660,6 +1899,49 @@ func TestStreamEventStreamAsAnthropicEstimatesOutputTokensWhenMissing(t *testing
 	deltaSection := output[deltaIdx:]
 	require.NotContains(t, deltaSection, `"output_tokens":0`, "message_delta output_tokens should not be 0")
 	require.Contains(t, deltaSection, `"output_tokens":`, "output_tokens should be present in message_delta")
+}
+
+func TestStreamEventStreamAsAnthropicCapturesKiroCredits(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	var out bytes.Buffer
+
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "hello world"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{
+			"tokenUsage": map[string]any{
+				"uncachedInputTokens": 10,
+				"outputTokens":        5,
+			},
+		},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "meteringEvent", map[string]any{
+		"meteringEvent": map[string]any{"usage": 0.12},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "meteringEvent", map[string]any{
+		"meteringEvent": map[string]any{"usage": 0.05},
+	}))
+
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-sonnet-4-5", 10, KiroRequestContext{})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.InDelta(t, 0.17, result.Usage.KiroCredits, 0.000001)
+	require.Contains(t, out.String(), "_sub2api_kiro_credits")
+
+	var delta map[string]any
+	for _, line := range strings.Split(out.String(), "\n") {
+		data, ok := strings.CutPrefix(line, "data: ")
+		if !ok || !strings.Contains(data, "_sub2api_kiro_credits") {
+			continue
+		}
+		require.NoError(t, json.Unmarshal([]byte(data), &delta))
+		break
+	}
+	require.NotNil(t, delta)
+	usageMap, ok := delta["usage"].(map[string]any)
+	require.True(t, ok)
+	require.InDelta(t, 0.17, usageMap["_sub2api_kiro_credits"].(float64), 0.000001)
 }
 
 func TestStreamEventStreamAsAnthropicStreamingToolInputCountsOutputTokens(t *testing.T) {
