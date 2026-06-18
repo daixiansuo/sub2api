@@ -95,7 +95,7 @@ services:
       # =======================================================================
       # Timezone Configuration
       # =======================================================================
-      - TZ=${TZ:-Asia/Shanghai}
+      - TZ=UTC
 
       # =======================================================================
       # Gemini OAuth Configuration (for Gemini accounts)
@@ -166,7 +166,7 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       - POSTGRES_DB=${POSTGRES_DB:-sub2api}
       - PGDATA=/var/lib/postgresql/data
-      - TZ=${TZ:-Asia/Shanghai}
+      - TZ=UTC
     networks:
       - sub2api-network
     healthcheck:
@@ -197,7 +197,7 @@ services:
           --appendfsync everysec
           ${REDIS_PASSWORD:+--requirepass "$REDIS_PASSWORD"}'
     environment:
-      - TZ=${TZ:-Asia/Shanghai}
+      - TZ=UTC
       - REDISCLI_AUTH=${REDIS_PASSWORD:-}
     networks:
       - sub2api-network
