@@ -97,6 +97,7 @@ export default {
       claude: 'Claude',
       gemini: 'Gemini',
       antigravity: 'Antigravity',
+      kiro: 'Kiro',
       more: 'More'
     },
     // CTA section
@@ -878,6 +879,10 @@ export default {
     cacheTtlOverridden1h: 'Billed as 1h',
     totalRequests: 'Total Requests',
     totalTokens: 'Total Tokens',
+    cacheTotal: 'Cache',
+    cacheBreakdown: 'Cache Token Breakdown',
+    cacheCreationTokensLabel: 'Cache Creation',
+    cacheReadTokensLabel: 'Cache Read',
     totalCost: 'Total Cost',
     standardCost: 'Standard',
     actualCost: 'Actual',
@@ -1874,6 +1879,7 @@ export default {
         usageOpenAI: 'Usage (OpenAI)',
         usageGemini: 'Usage (Gemini)',
         usageAntigravity: 'Usage (Antigravity)',
+        usageKiro: 'Usage (Kiro)',
         concurrency: 'Concurrency',
         status: 'Status',
         lastActive: 'Last Active',

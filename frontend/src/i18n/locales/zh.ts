@@ -97,6 +97,7 @@ export default {
       claude: 'Claude',
       gemini: 'Gemini',
       antigravity: 'Antigravity',
+      kiro: 'Kiro',
       more: '更多'
     },
     // CTA 区块
@@ -882,6 +883,10 @@ export default {
     cacheTtlOverridden1h: '按 1h 计费',
     totalRequests: '总请求数',
     totalTokens: '总 Token',
+    cacheTotal: '缓存',
+    cacheBreakdown: '缓存 Token 明细',
+    cacheCreationTokensLabel: '缓存创建',
+    cacheReadTokensLabel: '缓存读取',
     totalCost: '总消费',
     standardCost: '标准',
     actualCost: '实际',
@@ -1895,6 +1900,7 @@ export default {
         usageOpenAI: '用量 (OpenAI)',
         usageGemini: '用量 (Gemini)',
         usageAntigravity: '用量 (Antigravity)',
+        usageKiro: '用量 (Kiro)',
         concurrency: '并发数',
         status: '状态',
         lastActive: '最后活跃时间',
