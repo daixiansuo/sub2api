@@ -278,8 +278,10 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 	if err != nil {
 		return nil, 0, err
 	}
-	if tokenType != "oauth" {
-		return nil, 0, fmt.Errorf("kiro requires oauth token, got %s", tokenType)
+	// Kiro 直连 AWS 支持两类 token:OAuth access_token 与 API Key(ksk_*)。
+	// API Key 模式下 GetAccessToken 返回 tokenType "apikey"(无需刷新)。
+	if tokenType != "oauth" && tokenType != "apikey" {
+		return nil, 0, fmt.Errorf("kiro requires oauth or apikey token, got %s", tokenType)
 	}
 
 	inputTokens := estimateKiroInputTokens(anthropicBody)
@@ -348,7 +350,13 @@ func (s *GatewayService) executeKiroUpstream(ctx context.Context, account *Accou
 
 func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, mappedModel, requestModel, token string, headers http.Header) (*http.Response, kiropkg.KiroRequestContext, error) {
 	var requestCtx kiropkg.KiroRequestContext
-	if err := s.checkAndWaitKiroCooldown(ctx, buildKiroAccountKey(account)); err != nil {
+	mode := kiroEndpointModeForRequest(account, parsed)
+	// KRS/Auto 模式：确保 profileArn 已解析（已有值时零开销，仅为安全兜底）
+	if mode == KiroEndpointModeAuto || mode == KiroEndpointModeKRS {
+		s.ensureKiroProfileArnForRequest(ctx, account, token, KiroEndpointModeKRS)
+	}
+	accountKey := buildKiroAccountKey(account)
+	if err := s.checkAndWaitKiroCooldown(ctx, accountKey); err != nil {
 		if failoverErr := asKiroCooldownFailoverError(err); failoverErr != nil {
 			return nil, requestCtx, failoverErr
 		}
@@ -357,21 +365,26 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 
 	modelID := kiropkg.MapModel(mappedModel)
 	currentToken := token
-	buildResult, err := s.buildKiroPayloadForAccount(ctx, account, parsed, anthropicBody, modelID, currentToken, requestModel, headers)
-	if err != nil {
-		return nil, requestCtx, err
-	}
-	payload := buildResult.Payload
-	requestCtx = buildResult.Context
-	logKiroStatelessReplay(account, buildResult.Payload)
 
-	endpoints := buildKiroEndpoints(account, kiroEndpointModeForRequest(parsed))
+	endpoints := buildKiroEndpoints(account, mode)
 	proxyURL := kiroProxyURL(account)
 	tlsProfile := s.tlsFPProfileService.ResolveTLSProfile(account)
-	accountKey := buildKiroAccountKey(account)
 	maxRetries := 2
 
 	for idx, endpoint := range endpoints {
+		// 按端点维度构建 payload：Q 端点 profileArn 为空，KRS 端点需要 profileArn
+		var profileArn string
+		if endpoint.Name == "KiroRuntime" {
+			profileArn = kiroResolveProfileArnForKRS(account)
+		}
+		buildResult, err := s.buildKiroPayloadForAccountWithArn(ctx, account, parsed, anthropicBody, modelID, currentToken, requestModel, headers, profileArn)
+		if err != nil {
+			return nil, requestCtx, err
+		}
+		payload := buildResult.Payload
+		requestCtx = buildResult.Context
+		logKiroStatelessReplay(account, buildResult.Payload)
+
 		for attempt := 0; attempt <= maxRetries; attempt++ {
 			req, err := newKiroJSONRequest(ctx, endpoint.URL, payload, currentToken, accountKey, buildKiroMachineID(account), endpoint.AmzTarget, account)
 			if err != nil {
@@ -463,7 +476,13 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 					if refreshErr == nil && strings.TrimSpace(refreshedToken) != "" {
 						currentToken = refreshedToken
 						accountKey = buildKiroAccountKey(account)
-						buildResult, err = s.buildKiroPayloadForAccount(ctx, account, parsed, anthropicBody, modelID, currentToken, requestModel, headers)
+						// 凭据可能已被 token 刷新更新，重新解析当前端点的 profileArn
+						if endpoint.Name == "KiroRuntime" {
+							profileArn = kiroResolveProfileArnForKRS(account)
+						} else {
+							profileArn = ""
+						}
+						buildResult, err = s.buildKiroPayloadForAccountWithArn(ctx, account, parsed, anthropicBody, modelID, currentToken, requestModel, headers, profileArn)
 						if err != nil {
 							return nil, requestCtx, err
 						}
@@ -527,17 +546,34 @@ func buildKiroEndpoints(account *Account, mode string) []kiroEndpointConfig {
 		}
 	}
 	region := kiroAPIRegion(account)
-	return []kiroEndpointConfig{
-		{
-			URL:  fmt.Sprintf("https://q.%s.amazonaws.com/generateAssistantResponse", region),
-			Name: "AmazonQ",
-		},
+	qEndpoint := kiroEndpointConfig{
+		URL:  fmt.Sprintf("https://q.%s.amazonaws.com/generateAssistantResponse", region),
+		Name: "AmazonQ",
 	}
+	if mode == KiroEndpointModeAuto {
+		// auto 模式：Q 优先；429、408/5xx 等可重试上游错误会切换到 KRS。
+		return []kiroEndpointConfig{
+			qEndpoint,
+			{
+				URL:  kiroKRSEndpointURL,
+				Name: "KiroRuntime",
+			},
+		}
+	}
+	return []kiroEndpointConfig{qEndpoint}
 }
 
 // kiroEndpointModeForRequest 从 ParsedRequest 取 group 配置的 Kiro endpoint 模式；
 // parsed/Group 为 nil 时安全兜底为 "q"。
-func kiroEndpointModeForRequest(parsed *ParsedRequest) string {
+//
+// API Key 账号强制走 Q 端点(q.{region}.amazonaws.com):KRS 网关
+// (runtime.us-east-1.kiro.dev)是 Kiro 自家 OAuth 网关,只认 OAuth/IdC token +
+// profileArn,不接受 AWS 的 ksk_ API Key(会返回 403 "bearer token invalid")。
+// 与 kiro.rs 一致——其 API Key 模式也只走 q.{region}.amazonaws.com。
+func kiroEndpointModeForRequest(account *Account, parsed *ParsedRequest) string {
+	if account != nil && account.Type == AccountTypeAPIKey {
+		return KiroEndpointModeQ
+	}
 	if parsed == nil || parsed.Group == nil {
 		return KiroEndpointModeQ
 	}
@@ -545,10 +581,19 @@ func kiroEndpointModeForRequest(parsed *ParsedRequest) string {
 }
 
 func (s *GatewayService) buildKiroPayloadForAccount(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID, token, requestModel string, headers http.Header) (*kiropkg.KiroBuildResult, error) {
+	var profileArn string
+	if kiroEndpointModeForRequest(account, parsed) == KiroEndpointModeKRS {
+		profileArn = kiroResolveProfileArnForKRS(account)
+	}
+	return s.buildKiroPayloadForAccountWithArn(ctx, account, parsed, anthropicBody, modelID, token, requestModel, headers, profileArn)
+}
+
+// buildKiroPayloadForAccountWithArn 使用显式 profileArn 构建 Kiro 请求 payload。
+// auto 模式下 Q/KRS 端点需要不同 profileArn，调用方按端点维度传入。
+func (s *GatewayService) buildKiroPayloadForAccountWithArn(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID, token, requestModel string, headers http.Header, profileArn string) (*kiropkg.KiroBuildResult, error) {
 	_ = s
 	_ = ctx
 	_ = token
-	profileArn := resolveKiroPayloadProfileArn(account)
 	anthropicBody = prepareKiroPayloadBodyForRequestModel(anthropicBody, requestModel)
 	buildResult, err := kiropkg.BuildKiroPayloadWithContext(anthropicBody, modelID, profileArn, "AI_EDITOR", headers)
 	if err != nil {

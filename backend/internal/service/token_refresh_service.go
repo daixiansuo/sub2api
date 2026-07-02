@@ -11,6 +11,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
+	"github.com/Wei-Shaw/sub2api/internal/util/logredact"
 )
 
 // tokenRefreshTempUnschedDuration token 刷新重试耗尽后临时不可调度的持续时间
@@ -51,6 +52,7 @@ func NewTokenRefreshService(
 	schedulerCache SchedulerCache,
 	cfg *config.Config,
 	tempUnschedCache TempUnschedCache,
+	grokOAuthServices ...*GrokOAuthService,
 ) *TokenRefreshService {
 	s := &TokenRefreshService{
 		accountRepo:      accountRepo,
@@ -68,6 +70,11 @@ func NewTokenRefreshService(
 	geminiRefresher := NewGeminiTokenRefresher(geminiOAuthService)
 	agRefresher := NewAntigravityTokenRefresher(antigravityOAuthService)
 	kiroRefresher := NewKiroTokenRefresher(kiroOAuthService)
+	var grokOAuthService *GrokOAuthService
+	if len(grokOAuthServices) > 0 {
+		grokOAuthService = grokOAuthServices[0]
+	}
+	grokRefresher := NewGrokTokenRefresher(grokOAuthService)
 
 	// 注册平台特定的刷新器（TokenRefresher 接口）
 	s.refreshers = []TokenRefresher{
@@ -76,6 +83,7 @@ func NewTokenRefreshService(
 		geminiRefresher,
 		agRefresher,
 		kiroRefresher,
+		grokRefresher,
 	}
 
 	// 注册对应的 OAuthRefreshExecutor（带 CacheKey 方法）
@@ -85,6 +93,7 @@ func NewTokenRefreshService(
 		geminiRefresher,
 		agRefresher,
 		kiroRefresher,
+		grokRefresher,
 	}
 
 	return s
@@ -306,7 +315,7 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 
 		// 不可重试错误（invalid_grant/invalid_client 等）直接标记 error 状态并返回
 		if isNonRetryableRefreshError(err) {
-			errorMsg := fmt.Sprintf("Token refresh failed (non-retryable): %v", err)
+			errorMsg := "Token refresh failed (non-retryable): " + logredact.RedactText(err.Error())
 			s.notifyAccountSchedulingBlocked(account, time.Time{}, "token_refresh_non_retryable")
 			if setErr := s.accountRepo.SetError(ctx, account.ID, errorMsg); setErr != nil {
 				slog.Error("token_refresh.set_error_status_failed",
@@ -343,7 +352,10 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 
 	// 设置临时不可调度 10 分钟（不标记 error，保持 status=active 让下个刷新周期能继续尝试）
 	until := time.Now().Add(tokenRefreshTempUnschedDuration)
-	reason := fmt.Sprintf("token refresh retry exhausted: %v", lastErr)
+	reason := "token refresh retry exhausted"
+	if lastErr != nil {
+		reason += ": " + logredact.RedactText(lastErr.Error())
+	}
 	s.notifyAccountSchedulingBlocked(account, until, "token_refresh_retry_exhausted")
 	if setErr := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason); setErr != nil {
 		slog.Warn("token_refresh.set_temp_unschedulable_failed",
@@ -423,6 +435,8 @@ func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *A
 	s.ensureOpenAIPrivacy(ctx, account)
 	// Antigravity OAuth: 刷新成功后，检查是否已设置 privacy_mode，未设置则调用 setUserSettings
 	s.ensureAntigravityPrivacy(ctx, account)
+	// Kiro OAuth: 刷新成功后，提前解析并回填 profileArn（Enterprise/IdC 账号需要）
+	s.ensureKiroProfileArn(ctx, account)
 }
 
 // errRefreshSkipped 表示刷新被跳过（锁竞争或已被其他路径刷新），不计入 failed 或 refreshed
@@ -441,15 +455,22 @@ func isNonRetryableRefreshError(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	nonRetryable := []string{
-		"invalid_grant",          // refresh_token 已失效
-		"invalid_refresh_token",  // refresh_token 无效, team 账号工作区被删除会出现
-		"app_session_terminated", // refresh_token team 账号工作区被删除
-		"refresh_token_reused",   // OpenAI refresh_token 已被使用，必须重新授权
-		"invalid_client",         // 客户端配置错误
-		"unauthorized_client",    // 客户端未授权
-		"access_denied",          // 访问被拒绝
-		"missing_project_id",     // 缺少 project_id
+		"invalid_grant",             // refresh_token 已失效
+		"invalid_refresh_token",     // refresh_token 无效, team 账号工作区被删除会出现
+		"app_session_terminated",    // refresh_token team 账号工作区被删除
+		"refresh_token_reused",      // OpenAI refresh_token 已被使用，必须重新授权
+		"refresh_token_invalidated", // OpenAI session ended; refresh token invalidated
+		"invalid_client",            // 客户端配置错误
+		"unauthorized_client",       // 客户端未授权
+		"access_denied",             // 访问被拒绝
+		"missing_project_id",        // 缺少 project_id
 		"no refresh token available",
+		"grok_oauth_entitlement_denied",
+		"entitlement_denied",
+		"invalid_scope",
+		"unknown scope",
+		"subscription required",
+		"no active grok subscription",
 	}
 	for _, needle := range nonRetryable {
 		if strings.Contains(msg, needle) {
@@ -500,6 +521,29 @@ func (s *TokenRefreshService) ensureOpenAIPrivacy(ctx context.Context, account *
 			"privacy_mode", mode,
 		)
 	}
+}
+
+// ensureKiroProfileArn 后台刷新中检查 Kiro OAuth 账号的 profileArn 是否已回填。
+// Enterprise/IdC 账号的 OAuth 流程不返回 profileArn，需要在 token 刷新成功后
+// 主动调用 ListAvailableProfiles API 解析真实 ARN 并持久化，避免请求路径首次触发时延迟。
+func (s *TokenRefreshService) ensureKiroProfileArn(ctx context.Context, account *Account) {
+	if account.Platform != PlatformKiro || account.Type != AccountTypeOAuth {
+		return
+	}
+
+	// 已有真实（非占位符）profileArn → 无需解析
+	existingARN := strings.TrimSpace(account.GetCredential("profile_arn"))
+	if existingARN != "" && !kiroIsPlaceholderProfileARN(existingARN) {
+		return
+	}
+
+	// 使用刚刷新的 access_token 调用 ListAvailableProfiles
+	token := strings.TrimSpace(account.GetCredential("access_token"))
+	if token == "" {
+		return
+	}
+
+	_ = kiroResolveAndPersistProfileArn(ctx, s.accountRepo, account, token)
 }
 
 // ensureAntigravityPrivacy 后台刷新中检查 Antigravity OAuth 账号隐私状态。
