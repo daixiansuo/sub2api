@@ -13,7 +13,6 @@ import (
 	"log/slog"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
-	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -21,16 +20,10 @@ import (
 )
 
 const (
-	dataType                           = "sub2api-data"
-	legacyDataType                     = "sub2api-bundle"
-	dataVersion                        = 1
-	dataPageCap                        = 1000
-	dataImportSourceKiroAccountManager = "kiro_account_manager"
-)
-
-var (
-	refreshKiroIDCTokenForDataImport    = kiropkg.RefreshIDCToken
-	refreshKiroSocialTokenForDataImport = kiropkg.RefreshSocialToken
+	dataType       = "sub2api-data"
+	legacyDataType = "sub2api-bundle"
+	dataVersion    = 1
+	dataPageCap    = 1000
 )
 
 type DataPayload struct {
@@ -415,15 +408,6 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest, 
 		}
 
 		enrichCredentialsFromIDToken(&item)
-		if err := refreshKiroAccountManagerCredentials(ctx, &item); err != nil {
-			result.AccountFailed++
-			result.Errors = append(result.Errors, DataImportError{
-				Kind:    "account",
-				Name:    item.Name,
-				Message: err.Error(),
-			})
-			continue
-		}
 
 		accountInput := &service.CreateAccountInput{
 			Name:                 item.Name,
@@ -643,160 +627,9 @@ func parseDataImportPayload(raw json.RawMessage) (DataPayload, error) {
 			return DataPayload{}, fmt.Errorf("data JSON 解析失败: %w", err)
 		}
 		return payload, nil
-	case '[':
-		return convertKiroAccountManagerPayload(trimmed)
 	default:
-		return DataPayload{}, errors.New("unsupported data format: expected sub2api data export or kiro-account-manager account array")
+		return DataPayload{}, errors.New("unsupported data format: expected sub2api data export object")
 	}
-}
-
-func convertKiroAccountManagerPayload(raw []byte) (DataPayload, error) {
-	var items []map[string]any
-	if err := json.Unmarshal(raw, &items); err != nil {
-		return DataPayload{}, fmt.Errorf("kiro-account-manager JSON 解析失败: %w", err)
-	}
-
-	accounts := make([]DataAccount, 0, len(items))
-	for i, item := range items {
-		if !looksLikeKiroAccountManagerItem(item) {
-			return DataPayload{}, errors.New("unsupported data format: expected sub2api data export or kiro-account-manager account array")
-		}
-		accounts = append(accounts, convertKiroAccountManagerAccount(item, i+1))
-	}
-
-	return DataPayload{
-		Type:       dataType,
-		Version:    dataVersion,
-		ExportedAt: time.Now().UTC().Format(time.RFC3339),
-		Proxies:    []DataProxy{},
-		Accounts:   accounts,
-	}, nil
-}
-
-func looksLikeKiroAccountManagerItem(item map[string]any) bool {
-	if item == nil {
-		return false
-	}
-	for _, key := range []string{
-		"accessToken",
-		"refreshToken",
-		"profileArn",
-		"clientIdHash",
-		"clientId",
-		"clientSecret",
-		"authMethod",
-		"provider",
-		"machineId",
-	} {
-		if _, ok := item[key]; ok {
-			return true
-		}
-	}
-	return false
-}
-
-func convertKiroAccountManagerAccount(item map[string]any, index int) DataAccount {
-	email := dataImportString(item, "email")
-	label := dataImportString(item, "label")
-	sourceID := dataImportString(item, "id")
-	name := firstNonEmptyString(email, label, sourceID)
-	if name == "" {
-		name = fmt.Sprintf("Kiro 导入账号 #%d", index)
-	}
-
-	credentials := map[string]any{}
-	setDataImportString(credentials, "access_token", dataImportString(item, "accessToken"))
-	setDataImportString(credentials, "refresh_token", dataImportString(item, "refreshToken"))
-	setDataImportString(credentials, "profile_arn", dataImportString(item, "profileArn"))
-	setDataImportString(credentials, "expires_at", dataImportString(item, "expiresAt"))
-	setDataImportString(credentials, "auth_method", normalizeKiroAccountManagerAuthMethod(item))
-	setDataImportString(credentials, "provider", dataImportString(item, "provider"))
-	setDataImportString(credentials, "client_id", dataImportString(item, "clientId"))
-	setDataImportString(credentials, "client_secret", dataImportString(item, "clientSecret"))
-	setDataImportString(credentials, "client_id_hash", dataImportString(item, "clientIdHash"))
-	setDataImportString(credentials, "email", email)
-	setDataImportString(credentials, "start_url", dataImportString(item, "startUrl"))
-	setDataImportString(credentials, "region", dataImportString(item, "region"))
-	setDataImportString(credentials, "machineId", dataImportString(item, "machineId"))
-	setDataImportString(credentials, "id_token", dataImportString(item, "idToken"))
-
-	extra := map[string]any{
-		"import_source": dataImportSourceKiroAccountManager,
-	}
-	setDataImportString(extra, "source_id", sourceID)
-	setDataImportString(extra, "label", label)
-	setDataImportString(extra, "user_id", dataImportString(item, "userId"))
-	setDataImportString(extra, "added_at", dataImportString(item, "addedAt"))
-	setDataImportString(extra, "source_status", dataImportString(item, "status"))
-	setDataImportString(extra, "disabled_reason", dataImportString(item, "disabledReason"))
-
-	return DataAccount{
-		Name:        name,
-		Platform:    service.PlatformKiro,
-		Type:        service.AccountTypeOAuth,
-		Credentials: credentials,
-		Extra:       extra,
-		Concurrency: 3,
-		Priority:    50,
-	}
-}
-
-func normalizeKiroAccountManagerAuthMethod(item map[string]any) string {
-	authMethod := strings.ToLower(strings.TrimSpace(dataImportString(item, "authMethod")))
-	switch authMethod {
-	case "idc":
-		return "idc"
-	case "social":
-		return "social"
-	}
-	if dataImportString(item, "clientId") != "" || dataImportString(item, "clientSecret") != "" {
-		return "idc"
-	}
-	if strings.EqualFold(strings.TrimSpace(dataImportString(item, "provider")), "BuilderId") {
-		return "idc"
-	}
-	return authMethod
-}
-
-func setDataImportString(target map[string]any, key, value string) {
-	value = strings.TrimSpace(value)
-	if value != "" {
-		target[key] = value
-	}
-}
-
-func dataImportString(item map[string]any, key string) string {
-	if item == nil {
-		return ""
-	}
-	return dataImportAnyString(item[key])
-}
-
-func dataImportAnyString(value any) string {
-	switch v := value.(type) {
-	case string:
-		return strings.TrimSpace(v)
-	case json.Number:
-		return strings.TrimSpace(v.String())
-	default:
-		return ""
-	}
-}
-
-func dataImportMapString(item map[string]any, key string) string {
-	if item == nil {
-		return ""
-	}
-	return dataImportAnyString(item[key])
-}
-
-func firstNonEmptyString(values ...string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
 }
 
 func validateDataHeader(payload DataPayload) error {
@@ -852,17 +685,6 @@ func validateDataAccount(item DataAccount) error {
 	if len(item.Credentials) == 0 {
 		return errors.New("account credentials is required")
 	}
-	if isKiroAccountManagerDataAccount(item) &&
-		dataImportMapString(item.Credentials, "access_token") == "" &&
-		dataImportMapString(item.Credentials, "refresh_token") == "" {
-		return errors.New("缺少 accessToken 或 refreshToken")
-	}
-	if isKiroAccountManagerDataAccount(item) &&
-		strings.EqualFold(dataImportMapString(item.Credentials, "auth_method"), "idc") &&
-		(dataImportMapString(item.Credentials, "client_id") == "" ||
-			dataImportMapString(item.Credentials, "client_secret") == "") {
-		return errors.New("Kiro IdC 导入需要 clientId 和 clientSecret")
-	}
 	switch item.Type {
 	case service.AccountTypeOAuth, service.AccountTypeSetupToken, service.AccountTypeAPIKey, service.AccountTypeUpstream:
 	default:
@@ -878,65 +700,6 @@ func validateDataAccount(item DataAccount) error {
 		return errors.New("priority must be >= 0")
 	}
 	return nil
-}
-
-func isKiroAccountManagerDataAccount(item DataAccount) bool {
-	return item.Platform == service.PlatformKiro &&
-		item.Type == service.AccountTypeOAuth &&
-		dataImportMapString(item.Extra, "import_source") == dataImportSourceKiroAccountManager
-}
-
-func refreshKiroAccountManagerCredentials(ctx context.Context, item *DataAccount) error {
-	if item == nil || !isKiroAccountManagerDataAccount(*item) {
-		return nil
-	}
-	credentials := item.Credentials
-	if credentials == nil {
-		return errors.New("Kiro credentials is required")
-	}
-
-	refreshToken := dataImportMapString(credentials, "refresh_token")
-	if refreshToken == "" {
-		return errors.New("Kiro 导入需要可验证的 refreshToken")
-	}
-
-	authMethod := strings.ToLower(strings.TrimSpace(dataImportMapString(credentials, "auth_method")))
-	var token *kiropkg.TokenData
-	var err error
-	switch authMethod {
-	case "idc":
-		clientID := dataImportMapString(credentials, "client_id")
-		clientSecret := dataImportMapString(credentials, "client_secret")
-		if clientID == "" || clientSecret == "" {
-			return errors.New("Kiro IdC 导入需要 clientId 和 clientSecret")
-		}
-		token, err = refreshKiroIDCTokenForDataImport(ctx, "", clientID, clientSecret, refreshToken, dataImportMapString(credentials, "region"), dataImportMapString(credentials, "start_url"))
-	default:
-		token, err = refreshKiroSocialTokenForDataImport(ctx, "", refreshToken, dataImportMapString(credentials, "provider"))
-	}
-	if err != nil {
-		return fmt.Errorf("Kiro refreshToken 验证失败: %w", err)
-	}
-	mergeKiroTokenData(credentials, token)
-	return nil
-}
-
-func mergeKiroTokenData(credentials map[string]any, token *kiropkg.TokenData) {
-	if credentials == nil || token == nil {
-		return
-	}
-	setDataImportString(credentials, "access_token", token.AccessToken)
-	setDataImportString(credentials, "refresh_token", token.RefreshToken)
-	setDataImportString(credentials, "profile_arn", token.ProfileArn)
-	setDataImportString(credentials, "expires_at", token.ExpiresAt)
-	setDataImportString(credentials, "auth_method", token.AuthMethod)
-	setDataImportString(credentials, "provider", token.Provider)
-	setDataImportString(credentials, "client_id", token.ClientID)
-	setDataImportString(credentials, "client_secret", token.ClientSecret)
-	setDataImportString(credentials, "client_id_hash", token.ClientIDHash)
-	setDataImportString(credentials, "email", token.Email)
-	setDataImportString(credentials, "start_url", token.StartURL)
-	setDataImportString(credentials, "region", token.Region)
 }
 
 func defaultProxyName(name string) string {

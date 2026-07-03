@@ -236,10 +236,7 @@ func (s *KiroOAuthService) RefreshToken(ctx context.Context, input *KiroRefreshT
 	if refreshToken == "" {
 		return nil, fmt.Errorf("kiro refresh token is required")
 	}
-	authMethod := strings.ToLower(strings.TrimSpace(input.AuthMethod))
-	if authMethod == "" {
-		authMethod = "social"
-	}
+	authMethod := resolveKiroRefreshAuthMethod(input.AuthMethod, input.ClientID, input.ClientSecret)
 
 	var token *kiropkg.TokenData
 	var err error
@@ -250,7 +247,7 @@ func (s *KiroOAuthService) RefreshToken(ctx context.Context, input *KiroRefreshT
 		if clientID == "" || clientSecret == "" {
 			return nil, fmt.Errorf("kiro idc refresh requires client_id and client_secret")
 		}
-		token, err = kiropkg.RefreshIDCToken(ctx, proxyURL, clientID, clientSecret, refreshToken, input.Region, input.StartURL)
+		token, err = kiropkg.RefreshIDCToken(ctx, proxyURL, clientID, clientSecret, refreshToken, input.Region, input.StartURL, input.Provider)
 	default:
 		token, err = kiropkg.RefreshSocialToken(ctx, proxyURL, refreshToken, input.Provider)
 	}
@@ -273,6 +270,17 @@ func (s *KiroOAuthService) RefreshToken(ctx context.Context, input *KiroRefreshT
 		token.Region = input.Region
 	}
 	return toKiroTokenInfo(token), nil
+}
+
+func resolveKiroRefreshAuthMethod(authMethod, clientID, clientSecret string) string {
+	method := strings.ToLower(strings.TrimSpace(authMethod))
+	if method != "" {
+		return method
+	}
+	if strings.TrimSpace(clientID) != "" && strings.TrimSpace(clientSecret) != "" {
+		return "idc"
+	}
+	return "social"
 }
 
 func (s *KiroOAuthService) RefreshAccountToken(ctx context.Context, account *Account) (*KiroTokenInfo, error) {
