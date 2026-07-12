@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 14 // v14: carry Kiro endpoint mode (q/krs) in snapshot
+const apiKeyAuthSnapshotVersion = 16 // v16: include batch image/video pricing, Kiro endpoint/cache, and group peak rate fields
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -265,11 +265,17 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			WeeklyLimitUSD:                  groupForSnapshot.WeeklyLimitUSD,
 			MonthlyLimitUSD:                 groupForSnapshot.MonthlyLimitUSD,
 			AllowImageGeneration:            groupForSnapshot.AllowImageGeneration,
+			AllowBatchImageGeneration:       groupForSnapshot.AllowBatchImageGeneration,
 			ImageRateIndependent:            groupForSnapshot.ImageRateIndependent,
 			ImageRateMultiplier:             groupForSnapshot.ImageRateMultiplier,
 			ImagePrice1K:                    groupForSnapshot.ImagePrice1K,
 			ImagePrice2K:                    groupForSnapshot.ImagePrice2K,
 			ImagePrice4K:                    groupForSnapshot.ImagePrice4K,
+			VideoRateIndependent:            groupForSnapshot.VideoRateIndependent,
+			VideoRateMultiplier:             groupForSnapshot.VideoRateMultiplier,
+			VideoPrice480P:                  groupForSnapshot.VideoPrice480P,
+			VideoPrice720P:                  groupForSnapshot.VideoPrice720P,
+			VideoPrice1080P:                 groupForSnapshot.VideoPrice1080P,
 			ClaudeCodeOnly:                  groupForSnapshot.ClaudeCodeOnly,
 			FallbackGroupID:                 groupForSnapshot.FallbackGroupID,
 			FallbackGroupIDOnInvalidRequest: groupForSnapshot.FallbackGroupIDOnInvalidRequest,
@@ -287,6 +293,10 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			KiroStickySessionTTLSeconds:     groupForSnapshot.EffectiveKiroStickySessionTTLSeconds(),
 			KiroCacheEmulationRatio:         groupForSnapshot.EffectiveKiroCacheEmulationRatio(),
 			KiroEndpointMode:                groupForSnapshot.EffectiveKiroEndpointMode(),
+			PeakRateEnabled:                 groupForSnapshot.PeakRateEnabled,
+			PeakStart:                       groupForSnapshot.PeakStart,
+			PeakEnd:                         groupForSnapshot.PeakEnd,
+			PeakRateMultiplier:              groupForSnapshot.PeakRateMultiplier,
 		}
 	}
 	return snapshot
@@ -343,11 +353,17 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			WeeklyLimitUSD:                  snapshot.Group.WeeklyLimitUSD,
 			MonthlyLimitUSD:                 snapshot.Group.MonthlyLimitUSD,
 			AllowImageGeneration:            snapshot.Group.AllowImageGeneration,
+			AllowBatchImageGeneration:       snapshot.Group.AllowBatchImageGeneration,
 			ImageRateIndependent:            snapshot.Group.ImageRateIndependent,
 			ImageRateMultiplier:             snapshot.Group.ImageRateMultiplier,
 			ImagePrice1K:                    snapshot.Group.ImagePrice1K,
 			ImagePrice2K:                    snapshot.Group.ImagePrice2K,
 			ImagePrice4K:                    snapshot.Group.ImagePrice4K,
+			VideoRateIndependent:            snapshot.Group.VideoRateIndependent,
+			VideoRateMultiplier:             snapshot.Group.VideoRateMultiplier,
+			VideoPrice480P:                  snapshot.Group.VideoPrice480P,
+			VideoPrice720P:                  snapshot.Group.VideoPrice720P,
+			VideoPrice1080P:                 snapshot.Group.VideoPrice1080P,
 			ClaudeCodeOnly:                  snapshot.Group.ClaudeCodeOnly,
 			FallbackGroupID:                 snapshot.Group.FallbackGroupID,
 			FallbackGroupIDOnInvalidRequest: snapshot.Group.FallbackGroupIDOnInvalidRequest,
@@ -365,6 +381,10 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			KiroStickySessionTTLSeconds:     snapshot.Group.KiroStickySessionTTLSeconds,
 			KiroCacheEmulationRatio:         snapshot.Group.KiroCacheEmulationRatio,
 			KiroEndpointMode:                snapshot.Group.KiroEndpointMode,
+			PeakRateEnabled:                 snapshot.Group.PeakRateEnabled,
+			PeakStart:                       snapshot.Group.PeakStart,
+			PeakEnd:                         snapshot.Group.PeakEnd,
+			PeakRateMultiplier:              snapshot.Group.PeakRateMultiplier,
 		}
 		normalizeKiroCacheEmulationFields(apiKey.Group)
 		normalizeKiroEndpointFields(apiKey.Group)

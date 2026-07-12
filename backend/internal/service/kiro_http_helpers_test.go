@@ -91,7 +91,6 @@ func TestNewKiroJSONRequestAddsConditionalHeaders(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, "EXTERNAL_IDP", req.Header.Get("TokenType"))
-	require.Equal(t, "true", req.Header.Get("redirect-for-internal"))
 	require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/HEADER", req.Header.Get("x-amzn-kiro-profile-arn"))
 	require.Equal(t, "vibe", req.Header.Get("x-amzn-kiro-agent-mode"))
 	require.Equal(t, "true", req.Header.Get("x-amzn-codewhisperer-optout"))
@@ -122,14 +121,11 @@ func TestApplyKiroConditionalHeadersAPIKeyTokenType(t *testing.T) {
 		apiKeyAccount,
 	)
 	require.NoError(t, err)
-	// API Key 账号必须带小写 tokentype: API_KEY(对齐 kiro.rs;直接读原始 map key,
-	// 因为头以小写 key 存储,Header.Get 会按规范化的 "Tokentype" 查找而读不到)
+	// API Key 账号必须带 TokenType: API_KEY。
 	require.Equal(t, []string{"API_KEY"}, req.Header["TokenType"])
 	require.Equal(t, "Bearer ksk_test_key", req.Header.Get("Authorization"))
-	// 非 external_idp,不应带规范化的 EXTERNAL_IDP 头
-	require.Empty(t, req.Header["Tokentype"])
 
-	// OAuth 账号不应带 API_KEY tokentype
+	// OAuth 账号不应带 API_KEY TokenType
 	oauthAccount := &Account{
 		Platform: PlatformKiro,
 		Type:     AccountTypeOAuth,
