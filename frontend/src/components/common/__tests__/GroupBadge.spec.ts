@@ -1,4 +1,5 @@
 import { mount } from '@vue/test-utils'
+import { createPinia } from 'pinia'
 import { describe, expect, it, vi } from 'vitest'
 import GroupBadge from '../GroupBadge.vue'
 
@@ -19,6 +20,9 @@ describe('GroupBadge', () => {
         name: 'kiro free',
         platform: 'kiro',
         rateMultiplier: 1
+      },
+      global: {
+        plugins: [createPinia()]
       }
     })
 
