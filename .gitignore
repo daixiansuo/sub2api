@@ -120,6 +120,8 @@ deploy/.deploy_history
 # 其他
 # ===================
 tests
+!deploy/tests/
+!deploy/tests/**
 CLAUDE.md
 .claude
 scripts
