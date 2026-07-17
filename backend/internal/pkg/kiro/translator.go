@@ -61,7 +61,7 @@ const (
 var (
 	kiroRemoteImageHTTPClient = &http.Client{Timeout: kiroRemoteImageTimeout}
 	requiredToolFields        = map[string][][]string{
-		"write":              {{"file_path", "path"}, {"content"}},
+		"write":              {{"filePath", "file_path", "path"}, {"content"}},
 		"write_to_file":      {{"path"}, {"content"}},
 		"fswrite":            {{"path"}, {"content"}},
 		"create_file":        {{"path"}, {"content"}},
