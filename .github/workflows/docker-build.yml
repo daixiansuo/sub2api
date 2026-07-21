@@ -1,0 +1,185 @@
+name: Build Sub2API container image
+
+on:
+  push:
+    branches:
+      - owner
+      - 'x*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build_candidate:
+    name: Build candidate image
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/x'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Resolve image, tags, and build args
+        id: image
+        env:
+          CONFIGURED_IMAGE_NAME: ${{ vars.DOCKER_IMAGE_NAME }}
+        shell: bash
+        run: |
+          IMAGE_NAME="${CONFIGURED_IMAGE_NAME:-$GITHUB_REPOSITORY}"
+          IMAGE_NAME=$(printf '%s' "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')
+          IMAGE="${REGISTRY}/${IMAGE_NAME}"
+
+          COMMIT="${GITHUB_SHA::7}"
+          VERSION="${GITHUB_REF_NAME}-${COMMIT}"
+          DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          {
+            echo "image=$IMAGE"
+            echo "commit=$COMMIT"
+            echo "version=$VERSION"
+            echo "date=$DATE"
+            echo "tags<<EOF"
+            echo "$IMAGE:$GITHUB_REF_NAME"
+            echo "$IMAGE:sha-$COMMIT"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Protect stable tags from candidate builds
+        shell: bash
+        run: |
+          while IFS= read -r tag; do
+            case "$tag" in
+              *:latest|*:owner)
+                echo "::error::Candidate builds must not push stable tag $tag. Build x* and sha-* tags only; owner promotes latest."
+                exit 1
+                ;;
+            esac
+          done <<< "${{ steps.image.outputs.tags }}"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push multi-platform image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.image.outputs.tags }}
+          build-args: |
+            VERSION=${{ steps.image.outputs.version }}
+            COMMIT=${{ steps.image.outputs.commit }}
+            DATE=${{ steps.image.outputs.date }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign candidate image
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "$IMAGE@$DIGEST"
+
+      - name: Publish candidate summary
+        run: |
+          {
+            echo '### Sub2API candidate image published'
+            echo
+            echo '- Image: `${{ steps.image.outputs.image }}`'
+            echo '- Version: `${{ steps.image.outputs.version }}`'
+            echo '- Digest: `${{ steps.build.outputs.digest }}`'
+            echo
+            echo 'Tags:'
+            echo '```text'
+            echo '${{ steps.image.outputs.tags }}'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  promote:
+    name: Promote owner image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/owner'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve image and source tag
+        id: image
+        env:
+          CONFIGURED_IMAGE_NAME: ${{ vars.DOCKER_IMAGE_NAME }}
+        shell: bash
+        run: |
+          IMAGE_NAME="${CONFIGURED_IMAGE_NAME:-$GITHUB_REPOSITORY}"
+          IMAGE_NAME=$(printf '%s' "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')
+          IMAGE="${REGISTRY}/${IMAGE_NAME}"
+          SOURCE_TAG="sha-${GITHUB_SHA::7}"
+
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "source_tag=$SOURCE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify candidate image exists
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+          SOURCE_TAG: ${{ steps.image.outputs.source_tag }}
+        shell: bash
+        run: |
+          SOURCE="$IMAGE:$SOURCE_TAG"
+          if ! docker buildx imagetools inspect "$SOURCE" >/dev/null 2>&1; then
+            echo "::error::Candidate image $SOURCE does not exist. You must first build this exact commit from an x* candidate branch, then merge it to owner."
+            exit 1
+          fi
+
+      - name: Promote owner and latest tags
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+          SOURCE_TAG: ${{ steps.image.outputs.source_tag }}
+        shell: bash
+        run: |
+          SOURCE="$IMAGE:$SOURCE_TAG"
+          docker buildx imagetools create \
+            --tag "$IMAGE:owner" \
+            --tag "$IMAGE:latest" \
+            "$SOURCE"
+
+      - name: Publish promotion summary
+        run: |
+          {
+            echo '### Sub2API image promoted'
+            echo
+            echo '- Image: `${{ steps.image.outputs.image }}`'
+            echo '- Source: `${{ steps.image.outputs.source_tag }}`'
+            echo '- Promoted tags: `owner`, `latest`'
+          } >> "$GITHUB_STEP_SUMMARY"
