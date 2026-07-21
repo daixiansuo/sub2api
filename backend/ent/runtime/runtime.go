@@ -29,6 +29,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/pendingauthsession"
 	"github.com/Wei-Shaw/sub2api/ent/promocode"
 	"github.com/Wei-Shaw/sub2api/ent/promocodeusage"
+	"github.com/Wei-Shaw/sub2api/ent/promptrule"
 	"github.com/Wei-Shaw/sub2api/ent/proxy"
 	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
 	"github.com/Wei-Shaw/sub2api/ent/schema"
@@ -1512,6 +1513,63 @@ func init() {
 	promocodeusageDescUsedAt := promocodeusageFields[3].Descriptor()
 	// promocodeusage.DefaultUsedAt holds the default value on creation for the used_at field.
 	promocodeusage.DefaultUsedAt = promocodeusageDescUsedAt.Default.(func() time.Time)
+	promptruleMixin := schema.PromptRule{}.Mixin()
+	promptruleMixinFields0 := promptruleMixin[0].Fields()
+	_ = promptruleMixinFields0
+	promptruleFields := schema.PromptRule{}.Fields()
+	_ = promptruleFields
+	// promptruleDescCreatedAt is the schema descriptor for created_at field.
+	promptruleDescCreatedAt := promptruleMixinFields0[0].Descriptor()
+	// promptrule.DefaultCreatedAt holds the default value on creation for the created_at field.
+	promptrule.DefaultCreatedAt = promptruleDescCreatedAt.Default.(func() time.Time)
+	// promptruleDescUpdatedAt is the schema descriptor for updated_at field.
+	promptruleDescUpdatedAt := promptruleMixinFields0[1].Descriptor()
+	// promptrule.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	promptrule.DefaultUpdatedAt = promptruleDescUpdatedAt.Default.(func() time.Time)
+	// promptrule.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	promptrule.UpdateDefaultUpdatedAt = promptruleDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// promptruleDescName is the schema descriptor for name field.
+	promptruleDescName := promptruleFields[0].Descriptor()
+	// promptrule.NameValidator is a validator for the "name" field. It is called by the builders before save.
+	promptrule.NameValidator = func() func(string) error {
+		validators := promptruleDescName.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(name string) error {
+			for _, fn := range fns {
+				if err := fn(name); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// promptruleDescEnabled is the schema descriptor for enabled field.
+	promptruleDescEnabled := promptruleFields[2].Descriptor()
+	// promptrule.DefaultEnabled holds the default value on creation for the enabled field.
+	promptrule.DefaultEnabled = promptruleDescEnabled.Default.(bool)
+	// promptruleDescOrder is the schema descriptor for order field.
+	promptruleDescOrder := promptruleFields[3].Descriptor()
+	// promptrule.DefaultOrder holds the default value on creation for the order field.
+	promptrule.DefaultOrder = promptruleDescOrder.Default.(int)
+	// promptruleDescRole is the schema descriptor for role field.
+	promptruleDescRole := promptruleFields[4].Descriptor()
+	// promptrule.DefaultRole holds the default value on creation for the role field.
+	promptrule.DefaultRole = promptruleDescRole.Default.(string)
+	// promptrule.RoleValidator is a validator for the "role" field. It is called by the builders before save.
+	promptrule.RoleValidator = promptruleDescRole.Validators[0].(func(string) error)
+	// promptruleDescContent is the schema descriptor for content field.
+	promptruleDescContent := promptruleFields[5].Descriptor()
+	// promptrule.ContentValidator is a validator for the "content" field. It is called by the builders before save.
+	promptrule.ContentValidator = promptruleDescContent.Validators[0].(func(string) error)
+	// promptruleDescAction is the schema descriptor for action field.
+	promptruleDescAction := promptruleFields[6].Descriptor()
+	// promptrule.DefaultAction holds the default value on creation for the action field.
+	promptrule.DefaultAction = promptruleDescAction.Default.(string)
+	// promptrule.ActionValidator is a validator for the "action" field. It is called by the builders before save.
+	promptrule.ActionValidator = promptruleDescAction.Validators[0].(func(string) error)
 	proxyMixin := schema.Proxy{}.Mixin()
 	proxyMixinHooks1 := proxyMixin[1].Hooks()
 	proxy.Hooks[0] = proxyMixinHooks1[0]
@@ -1740,40 +1798,46 @@ func init() {
 	subscriptionplanDescDescription := subscriptionplanFields[2].Descriptor()
 	// subscriptionplan.DefaultDescription holds the default value on creation for the description field.
 	subscriptionplan.DefaultDescription = subscriptionplanDescDescription.Default.(string)
+	// subscriptionplanDescCurrency is the schema descriptor for currency field.
+	subscriptionplanDescCurrency := subscriptionplanFields[5].Descriptor()
+	// subscriptionplan.DefaultCurrency holds the default value on creation for the currency field.
+	subscriptionplan.DefaultCurrency = subscriptionplanDescCurrency.Default.(string)
+	// subscriptionplan.CurrencyValidator is a validator for the "currency" field. It is called by the builders before save.
+	subscriptionplan.CurrencyValidator = subscriptionplanDescCurrency.Validators[0].(func(string) error)
 	// subscriptionplanDescValidityDays is the schema descriptor for validity_days field.
-	subscriptionplanDescValidityDays := subscriptionplanFields[5].Descriptor()
+	subscriptionplanDescValidityDays := subscriptionplanFields[6].Descriptor()
 	// subscriptionplan.DefaultValidityDays holds the default value on creation for the validity_days field.
 	subscriptionplan.DefaultValidityDays = subscriptionplanDescValidityDays.Default.(int)
 	// subscriptionplanDescValidityUnit is the schema descriptor for validity_unit field.
-	subscriptionplanDescValidityUnit := subscriptionplanFields[6].Descriptor()
+	subscriptionplanDescValidityUnit := subscriptionplanFields[7].Descriptor()
 	// subscriptionplan.DefaultValidityUnit holds the default value on creation for the validity_unit field.
 	subscriptionplan.DefaultValidityUnit = subscriptionplanDescValidityUnit.Default.(string)
 	// subscriptionplan.ValidityUnitValidator is a validator for the "validity_unit" field. It is called by the builders before save.
 	subscriptionplan.ValidityUnitValidator = subscriptionplanDescValidityUnit.Validators[0].(func(string) error)
 	// subscriptionplanDescFeatures is the schema descriptor for features field.
-	subscriptionplanDescFeatures := subscriptionplanFields[7].Descriptor()
+	subscriptionplanDescFeatures := subscriptionplanFields[8].Descriptor()
 	// subscriptionplan.DefaultFeatures holds the default value on creation for the features field.
 	subscriptionplan.DefaultFeatures = subscriptionplanDescFeatures.Default.(string)
 	// subscriptionplanDescProductName is the schema descriptor for product_name field.
-	subscriptionplanDescProductName := subscriptionplanFields[8].Descriptor()
+	subscriptionplanDescProductName := subscriptionplanFields[9].Descriptor()
 	// subscriptionplan.DefaultProductName holds the default value on creation for the product_name field.
 	subscriptionplan.DefaultProductName = subscriptionplanDescProductName.Default.(string)
 	// subscriptionplan.ProductNameValidator is a validator for the "product_name" field. It is called by the builders before save.
 	subscriptionplan.ProductNameValidator = subscriptionplanDescProductName.Validators[0].(func(string) error)
 	// subscriptionplanDescForSale is the schema descriptor for for_sale field.
-	subscriptionplanDescForSale := subscriptionplanFields[9].Descriptor()
+	subscriptionplanDescForSale := subscriptionplanFields[10].Descriptor()
 	// subscriptionplan.DefaultForSale holds the default value on creation for the for_sale field.
 	subscriptionplan.DefaultForSale = subscriptionplanDescForSale.Default.(bool)
 	// subscriptionplanDescSortOrder is the schema descriptor for sort_order field.
-	subscriptionplanDescSortOrder := subscriptionplanFields[10].Descriptor()
+	subscriptionplanDescSortOrder := subscriptionplanFields[11].Descriptor()
 	// subscriptionplan.DefaultSortOrder holds the default value on creation for the sort_order field.
 	subscriptionplan.DefaultSortOrder = subscriptionplanDescSortOrder.Default.(int)
 	// subscriptionplanDescCreatedAt is the schema descriptor for created_at field.
-	subscriptionplanDescCreatedAt := subscriptionplanFields[11].Descriptor()
+	subscriptionplanDescCreatedAt := subscriptionplanFields[12].Descriptor()
 	// subscriptionplan.DefaultCreatedAt holds the default value on creation for the created_at field.
 	subscriptionplan.DefaultCreatedAt = subscriptionplanDescCreatedAt.Default.(func() time.Time)
 	// subscriptionplanDescUpdatedAt is the schema descriptor for updated_at field.
-	subscriptionplanDescUpdatedAt := subscriptionplanFields[12].Descriptor()
+	subscriptionplanDescUpdatedAt := subscriptionplanFields[13].Descriptor()
 	// subscriptionplan.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	subscriptionplan.DefaultUpdatedAt = subscriptionplanDescUpdatedAt.Default.(func() time.Time)
 	// subscriptionplan.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.

@@ -1110,6 +1110,64 @@ func TestStreamEventStreamAsAnthropicStreamsToolUseFragments(t *testing.T) {
 	require.Contains(t, output, `event: content_block_stop`)
 }
 
+func TestStreamEventStreamAsAnthropicEmitsEmptyInputToolUse(t *testing.T) {
+	const toolUseID = "toolu_exit_plan_mode"
+	stream := bytes.NewBuffer(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{
+			"toolUseId": toolUseID,
+			"name":      "ExitPlanMode",
+			"stop":      true,
+		},
+	}))
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4-6", 9, KiroRequestContext{})
+	require.NoError(t, err)
+	require.Equal(t, "tool_use", result.StopReason)
+
+	output := out.String()
+	require.Equal(t, 1, strings.Count(output, `"id":"`+toolUseID+`"`))
+	require.Contains(t, output, `"name":"ExitPlanMode"`)
+	require.Contains(t, output, `"stop_reason":"tool_use"`)
+	require.JSONEq(t, `{}`, extractStreamedToolInputJSON(t, output, toolUseID))
+}
+
+func TestStreamEventStreamAsAnthropicAcceptsOpenCodeWriteFilePath(t *testing.T) {
+	const toolUseID = "toolu_opencode_write"
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"name":      "write",
+		"toolUseId": toolUseID,
+	}))
+	for _, fragment := range []string{
+		`{"fileP`,
+		`ath":"/tmp/hello",`,
+		`"content":"hello"}`,
+	} {
+		_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+			"name":      "write",
+			"toolUseId": toolUseID,
+			"input":     fragment,
+		}))
+	}
+	_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"name":      "write",
+		"toolUseId": toolUseID,
+		"stop":      true,
+	}))
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4-6", 9, KiroRequestContext{})
+	require.NoError(t, err)
+	require.Equal(t, "tool_use", result.StopReason)
+
+	output := out.String()
+	require.Equal(t, 1, strings.Count(output, `"id":"`+toolUseID+`"`))
+	require.Contains(t, output, `"name":"write"`)
+	require.Contains(t, output, `"stop_reason":"tool_use"`)
+	require.JSONEq(t, `{"filePath":"/tmp/hello","content":"hello"}`, extractStreamedToolInputJSON(t, output, toolUseID))
+}
+
 func TestStreamEventStreamAsAnthropicUsesToolStopReasonWhenValidToolWasEmitted(t *testing.T) {
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
@@ -2391,6 +2449,39 @@ func TestNormalizeStreamingToolInput(t *testing.T) {
 			wantOK:   true,
 		},
 		{
+			name:     "accepts OpenCode camelCase write path",
+			toolName: "write",
+			raw:      `{"filePath":"/tmp/hello","content":"hello"}`,
+			want:     map[string]any{"filePath": "/tmp/hello", "content": "hello"},
+			wantOK:   true,
+		},
+		{
+			name:     "accepts snake case write path",
+			toolName: "write",
+			raw:      `{"file_path":"/tmp/hello","content":"hello"}`,
+			want:     map[string]any{"file_path": "/tmp/hello", "content": "hello"},
+			wantOK:   true,
+		},
+		{
+			name:     "accepts legacy write path",
+			toolName: "write",
+			raw:      `{"path":"/tmp/hello","content":"hello"}`,
+			want:     map[string]any{"path": "/tmp/hello", "content": "hello"},
+			wantOK:   true,
+		},
+		{
+			name:     "rejects write missing path",
+			toolName: "write",
+			raw:      `{"content":"hello"}`,
+			wantOK:   false,
+		},
+		{
+			name:     "rejects write missing content",
+			toolName: "write",
+			raw:      `{"filePath":"/tmp/hello"}`,
+			wantOK:   false,
+		},
+		{
 			name:     "rejects synthetically completable truncation",
 			toolName: "write_to_file",
 			raw:      `{"path":"main.go","content":"package main`,
@@ -2405,7 +2496,8 @@ func TestNormalizeStreamingToolInput(t *testing.T) {
 		{name: "rejects array", toolName: "custom_tool", raw: `[]`, wantOK: false},
 		{name: "rejects scalar", toolName: "custom_tool", raw: `"value"`, wantOK: false},
 		{name: "rejects null", toolName: "custom_tool", raw: `null`, wantOK: false},
-		{name: "rejects empty input", toolName: "custom_tool", raw: ` `, wantOK: false},
+		{name: "accepts empty input for tool without requirements", toolName: "custom_tool", raw: ` `, want: map[string]any{}, wantOK: true},
+		{name: "rejects empty input for tool with requirements", toolName: "write", raw: ` `, wantOK: false},
 		{name: "rejects malformed syntax", toolName: "custom_tool", raw: `{"x":}`, wantOK: false},
 	}
 

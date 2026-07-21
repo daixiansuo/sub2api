@@ -288,6 +288,10 @@ func (s *stubAdminService) GetGroupModelsListCandidates(ctx context.Context, id 
 	return []string{"claude-sonnet-4-6"}, nil
 }
 
+func (s *stubAdminService) GetGroupEffectiveModels(ctx context.Context, id int64) ([]string, error) {
+	return []string{"claude-sonnet-4-6"}, nil
+}
+
 func (s *stubAdminService) CreateGroup(ctx context.Context, input *service.CreateGroupInput) (*service.Group, error) {
 	group := service.Group{ID: 200, Name: input.Name, Status: service.StatusActive}
 	return &group, nil
@@ -416,6 +420,15 @@ func (s *stubAdminService) CreateAccount(ctx context.Context, input *service.Cre
 	}
 	account := service.Account{ID: 300, Name: input.Name, Status: service.StatusActive}
 	return &account, nil
+}
+
+func (s *stubAdminService) DuplicateAccount(ctx context.Context, id int64, actorScope, operationKey string) (*service.Account, error) {
+	account := service.Account{ID: 301, Name: "account (Copy)", Status: service.StatusActive, Schedulable: false}
+	return &account, nil
+}
+
+func (s *stubAdminService) RecoverDuplicateAccount(ctx context.Context, id int64, actorScope, operationKey string) (*service.Account, error) {
+	return nil, nil
 }
 
 func (s *stubAdminService) UpdateAccount(ctx context.Context, id int64, input *service.UpdateAccountInput) (*service.Account, error) {

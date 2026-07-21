@@ -61,7 +61,7 @@ const (
 var (
 	kiroRemoteImageHTTPClient = &http.Client{Timeout: kiroRemoteImageTimeout}
 	requiredToolFields        = map[string][][]string{
-		"write":              {{"file_path", "path"}, {"content"}},
+		"write":              {{"filePath", "file_path", "path"}, {"content"}},
 		"write_to_file":      {{"path"}, {"content"}},
 		"fswrite":            {{"path"}, {"content"}},
 		"create_file":        {{"path"}, {"content"}},
@@ -3758,7 +3758,7 @@ func extractSemanticEvents(eventType string, event map[string]any, lastContentFr
 func normalizeStreamingToolInput(name, raw string) (string, map[string]any, bool) {
 	normalized := strings.TrimSpace(raw)
 	if normalized == "" {
-		return "", nil, false
+		normalized = "{}"
 	}
 	normalized = escapeControlCharsInStrings(normalized)
 	normalized = removeTrailingCommasOutsideStrings(normalized)

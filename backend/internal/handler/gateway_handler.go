@@ -63,6 +63,7 @@ func explicitStickySessionIDFromHeaders(c *gin.Context) string {
 // GatewayHandler handles API gateway requests
 type GatewayHandler struct {
 	gatewayService            *service.GatewayService
+	openAIGatewayService      *service.OpenAIGatewayService
 	geminiCompatService       *service.GeminiMessagesCompatService
 	antigravityGatewayService *service.AntigravityGatewayService
 	userService               *service.UserService
@@ -71,6 +72,7 @@ type GatewayHandler struct {
 	apiKeyService             *service.APIKeyService
 	usageRecordWorkerPool     *service.UsageRecordWorkerPool
 	errorPassthroughService   *service.ErrorPassthroughService
+	promptRuleService         *service.PromptRuleService
 	contentModerationService  *service.ContentModerationService
 	concurrencyHelper         *ConcurrencyHelper
 	userMsgQueueHelper        *UserMsgQueueHelper
@@ -83,6 +85,7 @@ type GatewayHandler struct {
 // NewGatewayHandler creates a new GatewayHandler
 func NewGatewayHandler(
 	gatewayService *service.GatewayService,
+	openAIGatewayService *service.OpenAIGatewayService,
 	geminiCompatService *service.GeminiMessagesCompatService,
 	antigravityGatewayService *service.AntigravityGatewayService,
 	userService *service.UserService,
@@ -92,6 +95,7 @@ func NewGatewayHandler(
 	apiKeyService *service.APIKeyService,
 	usageRecordWorkerPool *service.UsageRecordWorkerPool,
 	errorPassthroughService *service.ErrorPassthroughService,
+	promptRuleService *service.PromptRuleService,
 	contentModerationService *service.ContentModerationService,
 	userMsgQueueService *service.UserMessageQueueService,
 	cfg *config.Config,
@@ -118,6 +122,7 @@ func NewGatewayHandler(
 
 	return &GatewayHandler{
 		gatewayService:            gatewayService,
+		openAIGatewayService:      openAIGatewayService,
 		geminiCompatService:       geminiCompatService,
 		antigravityGatewayService: antigravityGatewayService,
 		userService:               userService,
@@ -126,6 +131,7 @@ func NewGatewayHandler(
 		apiKeyService:             apiKeyService,
 		usageRecordWorkerPool:     usageRecordWorkerPool,
 		errorPassthroughService:   errorPassthroughService,
+		promptRuleService:         promptRuleService,
 		contentModerationService:  contentModerationService,
 		concurrencyHelper:         NewConcurrencyHelper(concurrencyService, SSEPingFormatClaude, pingInterval),
 		userMsgQueueHelper:        umqHelper,
@@ -224,6 +230,10 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		h.errorResponse(c, contentModerationStatus(decision), contentModerationErrorCode(decision), decision.Message)
 		return
 	}
+
+	originalUserQuery := service.ExtractWebSearchQueryFromBody(body)
+	parsedReq.OriginalUserQuery = &originalUserQuery
+	body = injectMatchingPromptRules(reqLog, h.promptRuleService, apiKey.GroupID, reqModel, service.PromptRuleProtocolAnthropic, body)
 
 	// Track if we've started streaming (for error handling)
 	streamStarted := false
@@ -359,6 +369,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					c.Request = c.Request.WithContext(ctx)
 					continue
 				case FailoverCanceled:
+					failoverClientGone(c)
 					return
 				default: // FailoverExhausted
 					if fs.LastFailoverErr != nil {
@@ -488,6 +499,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						h.handleFailoverExhausted(c, fs.LastFailoverErr, service.PlatformGemini, streamStarted)
 						return
 					case FailoverCanceled:
+						failoverClientGone(c)
 						return
 					}
 				}
@@ -645,6 +657,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					c.Request = c.Request.WithContext(ctx)
 					continue
 				case FailoverCanceled:
+					failoverClientGone(c)
 					return
 				default: // FailoverExhausted
 					if fs.LastFailoverErr != nil {
@@ -908,6 +921,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						h.handleFailoverExhausted(c, fs.LastFailoverErr, account.Platform, streamStarted)
 						return
 					case FailoverCanceled:
+						failoverClientGone(c)
 						return
 					}
 				}
